@@ -1,0 +1,12 @@
+# Build cache: official markdown downloaded by scripts/build_data.py
+data/raw/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Local tooling / editor
+.tools/
+.vscode/
+.idea/
+*.log
