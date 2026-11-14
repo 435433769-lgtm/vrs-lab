@@ -1,139 +1,109 @@
 # VRS Lab
 
-An unofficial, interactive explorer for the Counter-Strike 2 **Valve Regional Standings (VRS)**.
+一个非官方的 Counter-Strike 2 **Valve 区域排名（VRS）** 交互浏览器。
 
-It turns Valve's published markdown snapshots into a readable score breakdown: the four seed
-factors, the head-to-head adjustment, every match that contributed, prize winnings, and rank
-history. It does **not** recompute the ranking.
+它把 Valve 公布的 Markdown 快照转换成易读的分数拆解：四个种子因子、交手调整、每一场计入的比赛、赛事奖金以及排名历史。本站**不会**重新计算排名。
 
-## Status
+## 项目状态
 
-Static prototype — no build step, no framework. An optional local Python service adds automatic
-updates when Valve publishes a new monthly snapshot.
+静态原型，无需构建步骤，也不依赖前端框架。可选的本地 Python 服务会在 Valve 发布新的月度快照时自动更新数据。界面与本文档均以中文为主。
 
-- `index.html` — shell
-- `styles.css` — design system
-- `app.js` — router, rendering, charts (hash routes: `#/`, `#/team/:id`, `#/compare`, `#/methodology`)
-- `data.js` — generated data bundle (~6.5 MB)
-- `data/meta.json` — build metadata (`latestDate`, `builtAt`, counts) read by the updater and the page
-- `scripts/build_data.py` — data pipeline
-- `scripts/validate_data.py` — invariant checks
-- `scripts/dev_server.py` — local server with caching disabled, live update API, and auto rebuild
+- `index.html` — 页面外壳
+- `styles.css` — 设计系统
+- `app.js` — 路由、渲染、图表（Hash 路由：`#/`、`#/team/:id`、`#/compare`、`#/methodology`）
+- `data.js` — 生成的数据包（约 6.5 MB）
+- `data/meta.json` — 构建元数据（`latestDate`、`builtAt`、队伍数等），供更新服务和页面读取
+- `scripts/build_data.py` — 数据管线
+- `scripts/validate_data.py` — 数值不变量校验
+- `scripts/dev_server.py` — 本地服务：禁用缓存、实时更新 API、自动重建
 
-## Features
+## 功能
 
-- Rankings with region tabs, snapshot picker, sort, team/player search, movement, sparklines,
-  and a four-factor mini profile.
-- Team pages with a score waterfall, factor cards, roster-vs-org history lines, and every match
-  in the official detail file.
-- Multi-team comparison for **2–4 rosters**: factor radar, per-factor bars, score equation,
-  common opponents, a head-to-head matrix, and a multi-series rank chart. The selection is
-  shareable via `#/compare?t=id1,id2,…`.
-- Major invite lines on regional tables, using the last published allocation (Winter 2025).
-- A methodology page that separates official data from this site's own visualizations.
+- 排名页：区域标签、快照选择、排序、战队/选手搜索、排名变动、迷你走势图，以及四因子概览。
+- 战队页：分数瀑布图、因子卡片、阵容历史与同名战队历史、官方详情文件中的全部比赛。
+- **2–4 个阵容**的多队对比：因子雷达图、逐因子条形图、分数公式、共同对手、交手矩阵和多线排名图。对比结果可通过 `#/compare?t=id1,id2,…` 分享。
+- 区域排名表上的 Major 晋级线，使用最近一次公布的名额分配（Winter 2025）。
+- 方法说明页，明确区分官方数据与本站自己的可视化。
 
-## Run it
+## 运行
 
 ```powershell
 python scripts/dev_server.py --port 5173
-# then open http://127.0.0.1:5173/
+# 然后打开 http://127.0.0.1:5173/
 ```
 
-`dev_server.py` sends `no-store` headers and appends file mtimes to asset URLs, so edits show up
-on reload. A plain `python -m http.server 5173 --bind 127.0.0.1` also works, but the browser may
-keep stale copies of `data.js` / `app.js`, and live updates are disabled.
+`dev_server.py` 会发送 `no-store` 响应头，并在资源 URL 后追加文件修改时间，因此修改后刷新即可生效。直接用 `python -m http.server 5173 --bind 127.0.0.1` 也能打开页面，但浏览器可能缓存旧的 `data.js` / `app.js`，而且不会自动更新。
 
-## Live updates
+## 实时更新
 
-The local service checks Valve's official repository for a newer snapshot every 30 minutes
-(`--interval` changes this, minimum 60 seconds). When a newer snapshot date appears it runs
-`scripts/build_data.py` and writes `data/meta.json`; open pages notice the new `builtAt` and
-hot-swap to the rebuilt `data.js` without a full reload.
+本地服务每 30 分钟检查一次 Valve 官方仓库（可用 `--interval` 调整，最低 60 秒）。发现更新的快照日期时，它会运行 `scripts/build_data.py` 并写入 `data/meta.json`；已打开的页面会检测到新的 `builtAt`，并在不整页刷新的情况下热切换到新的 `data.js`。
 
-- `GET /api/meta` — build metadata plus updater state (`checking`, `building`, `lastCheck`,
-  `remoteLatest`, `lastError`)
-- `POST /api/check` — ask the updater to check now
-- Sidebar status button — click to check manually; green means synced, orange means a check or
-  rebuild is running, grey means the live service is not reachable (static hosting)
-- `data/update.log` — stdout/stderr of the last automatic rebuild
-- `--no-watch` — serve files only, never check or rebuild
+- `GET /api/meta` — 构建元数据与更新状态（`checking`、`building`、`lastCheck`、`remoteLatest`、`lastError`）
+- `POST /api/check` — 立即触发一次检查
+- 侧边栏状态按钮 — 点击可手动检查；绿色表示已同步，橙色表示正在检查或重建，灰色表示无法连接本地服务（静态托管）
+- `data/update.log` — 最近一次自动重建的输出日志
+- `--no-watch` — 只提供静态文件，不检查、不重建
 
-A failed check retries after 5 minutes; a normal check waits for the configured interval. If the
-page is served statically (Gitee Pages, `python -m http.server`), it shows “Static build” and keeps
-working with whatever `data.js` was last generated — rebuild and redeploy to publish a new month.
+检查失败后会在 5 分钟后重试；正常检查则等待配置的间隔。如果页面以静态方式托管（Gitee Pages、`python -m http.server`），侧边栏会显示“静态版本”，并继续使用上一次生成的 `data.js`；要发布新月份，需要重新构建并重新部署。
 
-## Rebuild the data
+## 重建数据
 
 ```powershell
 python scripts/build_data.py
 python scripts/validate_data.py
 ```
 
-The pipeline reads the official repository through the jsDelivr CDN (raw.githubusercontent is
-unreachable from some networks). Every downloaded file is cached under `data/raw/`, so reruns are
-fast and offline-safe. Delete `data/raw/` to force a refresh.
+数据管线通过 jsDelivr CDN 读取官方仓库（部分网络无法访问 raw.githubusercontent）。所有下载的文件都会缓存在 `data/raw/` 下，因此重复运行很快，也能离线工作。删除 `data/raw/` 可强制重新下载。
 
-Snapshot coverage is 2024-08-06 → 2026-11-02 (48 snapshots). Full match detail is parsed only for
-the latest snapshot; older snapshots are used for rank history.
+快照覆盖范围为 2024-08-06 → 2026-11-02（共 48 个快照）。只有最新快照会解析完整的比赛详情；更早的快照用于排名历史。
 
-## Data model
+## 数据模型
 
-| Concept | Definition |
+| 概念 | 定义 |
 | --- | --- |
-| Roster id | `sha1(sorted(lowercase nicknames))`, prefixed `r`. A roster change creates a new entity. |
-| Org trend | Rank series keyed by normalized team name. Visual aid only — it is not an identity. |
-| Points | Integer shown in the standings table. |
-| Final rank value | Decimal in the detail file; `points ≈ round(final)`. |
+| 阵容 ID | `sha1(排序后的小写选手昵称)`，前缀为 `r`。阵容变动会产生新的实体。 |
+| 战队趋势 | 按规范化队名聚合的排名序列，仅用于可视化，不代表身份。 |
+| 积分 | 排名表中显示的整数。 |
+| 最终排名分 | 详情文件中的小数；`积分 ≈ round(最终排名分)`。 |
 
-Rosters are identified by player set, not by organization name, because VRS itself is
-roster-based. Duplicate names (`OG`, `Sashi`, `BRUTE`, …) are therefore expected and kept apart.
+阵容由选手集合而非俱乐部名称识别，因为 VRS 本身以阵容为基础。因此出现同名战队（`OG`、`Sashi`、`BRUTE` 等）是正常现象，它们会被区分对待。
 
-## Validation
+## 校验
 
-`scripts/validate_data.py` checks, for the latest snapshot:
+`scripts/validate_data.py` 会对最新快照检查：
 
-- `final == starting + h2h` (tolerance 0.15)
-- `factor average == mean(four factors)` (tolerance 0.002)
-- `points ≈ final` (tolerance 0.5, because the detail page rounds to one decimal)
-- region totals, duplicate roster keys, roster sizes, history coverage
+- `final == starting + h2h`（容差 0.15）
+- `因子平均值 == 四个因子的均值`（容差 0.002）
+- `积分 ≈ final`（容差 0.5，因为详情页只保留一位小数）
+- 区域总数、重复阵容键、阵容人数、历史覆盖情况
 
-Current result: 376/376 teams pass all three numeric invariants; 244 Europe / 87 Americas / 45 Asia.
+当前结果：376/376 支战队通过全部三项数值不变量；欧洲 244 / 美洲 87 / 亚洲 45。
 
-## Qualification lines
+## 晋级线
 
-`data/qualification.json` holds the only officially published Major invite allocation (the Winter
-2025 table from the CS Major Supplemental Rulebook). It is embedded into the bundle as
-`payload.qualification` and rendered as:
+`data/qualification.json` 保存了唯一一次官方公布的 Major 名额分配（CS Major 补充规则手册中的 Winter 2025 表）。它会作为 `payload.qualification` 嵌入数据包，并渲染为：
 
-- dashed **Stage 3 / Stage 2 / Stage 1 lines** in regional standings (only when the region tab is
-  active, the table is sorted by rank, and no search is applied),
-- a **Major path** card in the rankings sidebar,
-- a badge on team pages and in the comparison summary,
-- the allocation table on the methodology page.
+- 区域排名表中的虚线 **第三阶段 / 第二阶段 / 第一阶段** 晋级线（仅当区域标签处于激活状态、按排名排序且没有搜索条件时显示）；
+- 排名页侧栏的 **Major 晋级线** 卡片；
+- 战队页与对比摘要中的徽章；
+- 方法说明页的名额分配表。
 
-Valve recalculates this allocation for every Major cycle from the previous Major's regional
-results, so the lines are labeled with their `asOf` date and are **not** a live qualification or a
-prediction.
+Valve 会在每个 Major 周期根据上一届 Major 的各区域成绩重新计算名额，因此这些线始终标注 `asOf` 日期，并且**不是**实时晋级资格或预测。
 
-## Known limitations
+## 已知限制
 
-- Official detail tables have **no event names**, so match rows are grouped only by date,
-  opponent, and event weight.
-- Only the latest snapshot carries full match/factor detail.
-- The bundle is a single ~6.5 MB script. Fine for a prototype; a real deployment should serve an
-  API and paginate.
-- Valve can change the model or the file format at any time.
+- 官方详情表**不包含赛事名称**，比赛行只能按日期、对手和赛事权重分组。
+- 只有最新快照包含完整的比赛/因子详情。
+- 数据包是单个约 6.5 MB 的脚本。对原型来说足够；正式部署应改为 API 并分页。
+- Valve 可能随时调整模型或文件格式。
 
-## Provenance & disclaimer
+## 数据来源与免责声明
 
-Standings and detail files:
+排名与详情文件：
 <https://github.com/ValveSoftware/counter-strike_regional_standings>
 
-The detail files state that event data for Regional Standings is provided by **HLTV.org**.
+详情文件注明，区域排名的赛事数据由 **HLTV.org** 提供。
 
-This is an unofficial fan-made prototype. It is not affiliated with, endorsed by, or supported by
-Valve, HLTV, or any tournament organizer. Do not use it for official invitations, eligibility, or
-seeding decisions.
+这是一个非官方的粉丝原型，与 Valve、HLTV 或任何赛事主办方均无隶属关系，也未获得其认可。请勿将其用于官方邀请、参赛资格或种子排位决策。
 
-The official repository has **no LICENSE file**. Its code is source-available, not open source.
-This project does not copy that code; it only reads the published data files.
+官方仓库**没有 LICENSE 文件**。其代码属于“源码可见”，并非开源。本项目不复制该仓库代码，只读取其公布的数据文件。
