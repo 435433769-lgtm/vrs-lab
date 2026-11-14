@@ -8,15 +8,17 @@ history. It does **not** recompute the ranking.
 
 ## Status
 
-Static prototype — no build step, no framework, no backend.
+Static prototype — no build step, no framework. An optional local Python service adds automatic
+updates when Valve publishes a new monthly snapshot.
 
 - `index.html` — shell
 - `styles.css` — design system
 - `app.js` — router, rendering, charts (hash routes: `#/`, `#/team/:id`, `#/compare`, `#/methodology`)
-- `data.js` — generated data bundle (~5.5 MB)
+- `data.js` — generated data bundle (~6.5 MB)
+- `data/meta.json` — build metadata (`latestDate`, `builtAt`, counts) read by the updater and the page
 - `scripts/build_data.py` — data pipeline
 - `scripts/validate_data.py` — invariant checks
-- `scripts/dev_server.py` — local dev server with caching disabled
+- `scripts/dev_server.py` — local server with caching disabled, live update API, and auto rebuild
 
 ## Features
 
@@ -34,12 +36,31 @@ Static prototype — no build step, no framework, no backend.
 
 ```powershell
 python scripts/dev_server.py --port 5173
-# then open http://127.0.0.1:5173/index.html
+# then open http://127.0.0.1:5173/
 ```
 
 `dev_server.py` sends `no-store` headers and appends file mtimes to asset URLs, so edits show up
 on reload. A plain `python -m http.server 5173 --bind 127.0.0.1` also works, but the browser may
-keep stale copies of `data.js` / `app.js`.
+keep stale copies of `data.js` / `app.js`, and live updates are disabled.
+
+## Live updates
+
+The local service checks Valve's official repository for a newer snapshot every 30 minutes
+(`--interval` changes this, minimum 60 seconds). When a newer snapshot date appears it runs
+`scripts/build_data.py` and writes `data/meta.json`; open pages notice the new `builtAt` and
+hot-swap to the rebuilt `data.js` without a full reload.
+
+- `GET /api/meta` — build metadata plus updater state (`checking`, `building`, `lastCheck`,
+  `remoteLatest`, `lastError`)
+- `POST /api/check` — ask the updater to check now
+- Sidebar status button — click to check manually; green means synced, orange means a check or
+  rebuild is running, grey means the live service is not reachable (static hosting)
+- `data/update.log` — stdout/stderr of the last automatic rebuild
+- `--no-watch` — serve files only, never check or rebuild
+
+A failed check retries after 5 minutes; a normal check waits for the configured interval. If the
+page is served statically (Gitee Pages, `python -m http.server`), it shows “Static build” and keeps
+working with whatever `data.js` was last generated — rebuild and redeploy to publish a new month.
 
 ## Rebuild the data
 
@@ -52,8 +73,8 @@ The pipeline reads the official repository through the jsDelivr CDN (raw.githubu
 unreachable from some networks). Every downloaded file is cached under `data/raw/`, so reruns are
 fast and offline-safe. Delete `data/raw/` to force a refresh.
 
-Snapshot coverage is 2025-01-06 → 2026-11-02 (29 monthly snapshots). Full match detail is parsed
-only for the latest snapshot; older snapshots are used for rank history.
+Snapshot coverage is 2024-08-06 → 2026-11-02 (48 snapshots). Full match detail is parsed only for
+the latest snapshot; older snapshots are used for rank history.
 
 ## Data model
 
@@ -99,7 +120,7 @@ prediction.
 - Official detail tables have **no event names**, so match rows are grouped only by date,
   opponent, and event weight.
 - Only the latest snapshot carries full match/factor detail.
-- The bundle is a single 5.5 MB script. Fine for a prototype; a real deployment should serve an
+- The bundle is a single ~6.5 MB script. Fine for a prototype; a real deployment should serve an
   API and paginate.
 - Valve can change the model or the file format at any time.
 

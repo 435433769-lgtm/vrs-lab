@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const DATA = window.VRS_DATA;
+  let DATA = window.VRS_DATA;
   const app = document.getElementById("app");
   const toastEl = document.getElementById("toast");
 
@@ -61,7 +61,9 @@
   // Rank history indexes, built once from the snapshot series.
   const HISTORY = new Map();
   const ORG_HISTORY = new Map();
-  (function buildHistoryIndex() {
+  function buildHistoryIndex() {
+    HISTORY.clear();
+    ORG_HISTORY.clear();
     DATA.dates.forEach((date) => {
       const snapshot = DATA.snapshots[date];
       if (!snapshot) return;
@@ -82,7 +84,8 @@
         ORG_HISTORY.get(key).push(entry);
       });
     });
-  })();
+  }
+  buildHistoryIndex();
 
   const latestSnap = DATA.snapshots[DATA.latestDate];
   const state = {
@@ -97,6 +100,17 @@
     matchFilter: "all",
     historyMode: "globalRank",
   };
+
+  // Live update status, kept outside render() so polling can refresh it in place.
+  const live = {
+    tone: "checking",
+    text: "Checking for updates…",
+    title: "Contacting the local update service.",
+    available: true,
+    builtAt: DATA.builtAt || null,
+  };
+  let liveTimer = null;
+  let liveBusy = false;
 
   /* ------------------------------------------------------------------ */
   /* Helpers                                                            */
@@ -233,12 +247,12 @@
     window.location.hash = hash;
   }
 
-  function showToast(message) {
+  function showToast(message, duration = 2200) {
     if (!toastEl) return;
     toastEl.textContent = message;
     toastEl.classList.add("show");
     window.clearTimeout(toastTimer);
-    toastTimer = window.setTimeout(() => toastEl.classList.remove("show"), 2200);
+    toastTimer = window.setTimeout(() => toastEl.classList.remove("show"), duration);
   }
 
   function previousDate(date) {
@@ -314,6 +328,10 @@
             <div class="snapshot-date">${esc(DATA.latestDate)}</div>
             <div class="muted small">${fmtInt(DATA.snapshots[DATA.latestDate]?.teamCount)} teams · ${DATA.dates.length} snapshots</div>
             <a class="source-link" href="${esc(DATA.source.repo)}" target="_blank" rel="noreferrer">Official source ↗</a>
+            <button class="live-status ${live.tone}" data-action="check-updates" title="${esc(live.title)}">
+              <span class="live-dot"></span>
+              <span class="live-text">${esc(live.text)}</span>
+            </button>
           </div>
 
           <div class="sidebar-footer">
@@ -1747,6 +1765,135 @@
   }
 
   /* ------------------------------------------------------------------ */
+  /* Live updates                                                       */
+  /* ------------------------------------------------------------------ */
+
+  function setLive(tone, text, title) {
+    const changed = live.tone !== tone || live.text !== text || live.title !== title;
+    live.tone = tone;
+    live.text = text;
+    live.title = title;
+    if (!changed) return;
+    const el = document.querySelector(".live-status");
+    if (!el) return;
+    el.className = `live-status ${tone}`;
+    el.title = title;
+    const label = el.querySelector(".live-text");
+    if (label) label.textContent = text;
+  }
+
+  function schedulePoll(delay) {
+    window.clearTimeout(liveTimer);
+    liveTimer = window.setTimeout(() => checkForUpdates(false), delay);
+  }
+
+  async function fetchMeta() {
+    const res = await fetch(`/api/meta?_=${Date.now()}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const type = res.headers.get("content-type") || "";
+    if (!type.includes("application/json")) throw new Error("not JSON");
+    return res.json();
+  }
+
+  async function adoptBundle(version) {
+    const res = await fetch(`data.js?v=${encodeURIComponent(version)}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`data.js HTTP ${res.status}`);
+    const text = await res.text();
+    const next = new Function(`${text}\nreturn window.VRS_DATA;`)();
+    adoptData(next);
+  }
+
+  function adoptData(next) {
+    if (!next || !next.snapshots || !next.latestDate) return;
+    const previousLatest = DATA.latestDate;
+    DATA = next;
+    buildHistoryIndex();
+
+    if (!DATA.snapshots[state.snapshotDate] || state.snapshotDate === previousLatest) {
+      state.snapshotDate = DATA.latestDate;
+    }
+
+    const ids = new Set((DATA.snapshots[DATA.latestDate]?.standings || []).map((team) => team.id));
+    state.compare = state.compare.filter((id) => ids.has(id));
+
+    live.builtAt = DATA.builtAt || null;
+    live.tone = "synced";
+    live.text = `Live · ${shortDate(DATA.latestDate)}`;
+    live.title = `Synced with the local update service. Latest official snapshot: ${DATA.latestDate}.`;
+    render();
+    showToast(`New official snapshot loaded: ${dateLabel(DATA.latestDate)}`, 5000);
+  }
+
+  async function checkForUpdates(manual = false) {
+    if (liveBusy) {
+      if (manual) showToast("An update check is already running.");
+      return;
+    }
+    liveBusy = true;
+    if (manual) setLive("checking", "Checking…", "Asking the local service for the newest snapshot.");
+    try {
+      const meta = await fetchMeta();
+      live.available = true;
+
+      if (meta.lastError) {
+        setLive("warn", "Update failed · cached data", meta.lastError);
+        schedulePoll(120000);
+      } else if (meta.building || meta.checking) {
+        setLive("building", "Checking official source…", "The local service is checking Valve's repository.");
+        schedulePoll(8000);
+      } else if (meta.builtAt && meta.builtAt !== (live.builtAt || DATA.builtAt)) {
+        if (DATA.builtAt === meta.builtAt) {
+          live.builtAt = meta.builtAt;
+          setLive(
+            "synced",
+            `Live · ${shortDate(DATA.latestDate)}`,
+            `Synced with the local update service. Latest official snapshot: ${DATA.latestDate}.`,
+          );
+          schedulePoll(60000);
+        } else {
+          setLive("building", "New snapshot found · loading…", "Downloading the rebuilt data bundle.");
+          try {
+            await adoptBundle(meta.builtAt);
+          } catch (err) {
+            setLive("warn", "Reload to update", `The new bundle could not be loaded: ${err.message}`);
+          }
+          schedulePoll(60000);
+        }
+      } else {
+        setLive(
+          "synced",
+          `Live · ${shortDate(DATA.latestDate)}`,
+          `Synced with the local update service. Latest official snapshot: ${DATA.latestDate}.`,
+        );
+        schedulePoll(60000);
+        if (manual) showToast("Already up to date.");
+      }
+    } catch (err) {
+      live.available = false;
+      setLive(
+        "offline",
+        "Static build",
+        "Live updates need the local Python service (python scripts/dev_server.py).",
+      );
+      schedulePoll(300000);
+      if (manual) showToast("Live updates need the local Python service.");
+    } finally {
+      liveBusy = false;
+    }
+  }
+
+  function initLiveUpdates() {
+    if (window.location.protocol === "file:") {
+      setLive("offline", "Static build", "Live updates need the local Python service.");
+      return;
+    }
+    window.setTimeout(() => checkForUpdates(false), 1500);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") checkForUpdates(false);
+    });
+  }
+
+  /* ------------------------------------------------------------------ */
   /* Events                                                             */
   /* ------------------------------------------------------------------ */
 
@@ -1757,6 +1904,11 @@
 
       if (action === "toggle-menu") {
         document.getElementById("sidebar")?.classList.toggle("open");
+        return;
+      }
+      if (action === "check-updates") {
+        event.preventDefault();
+        checkForUpdates(true);
         return;
       }
       if (action === "set-region") {
@@ -1896,4 +2048,5 @@
   document.addEventListener("input", onInput);
 
   render();
+  initLiveUpdates();
 })();

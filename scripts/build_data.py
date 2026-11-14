@@ -16,12 +16,14 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CACHE = ROOT / "data" / "raw"
 LOCAL_REPO = CACHE / "repo" / "counter-strike_regional_standings-main"
 OUT = ROOT / "data.js"
+META = ROOT / "data" / "meta.json"
 BASE = "https://cdn.jsdelivr.net/gh/ValveSoftware/counter-strike_regional_standings@main/"
 API = "https://api.github.com/repos/ValveSoftware/counter-strike_regional_standings/contents/live/"
 HEADERS = {"User-Agent": "vrs-prototype/0.1"}
@@ -78,6 +80,20 @@ def list_snapshot_dates(year: str) -> list[str]:
         if match:
             dates.append(match.group(1).replace("_", "-"))
     return sorted(dates)
+
+
+def list_years() -> list[str]:
+    """Discover the year folders that hold snapshots, so new years keep working."""
+    local = LOCAL_REPO / "live"
+    if local.is_dir():
+        names = [entry.name for entry in local.iterdir() if entry.is_dir()]
+    else:
+        req = urllib.request.Request(API, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=60) as response:
+            names = [entry["name"] for entry in json.load(response) if entry.get("type") == "dir"]
+
+    years = sorted(name for name in names if re.fullmatch(r"\d{4}", name))
+    return years or ["2025", str(datetime.now(timezone.utc).year)]
 
 
 def clean(value: str) -> str:
@@ -330,9 +346,11 @@ def load_qualification() -> dict | None:
 
 
 def main() -> None:
-    years = ["2025", "2026"]
+    years = list_years()
     dates_by_year = {year: list_snapshot_dates(year) for year in years}
     all_dates = sorted(date for dates in dates_by_year.values() for date in dates)
+    if not all_dates:
+        raise RuntimeError("No snapshots found in the official repository.")
     print(f"Snapshots: {len(all_dates)} ({all_dates[0]} .. {all_dates[-1]})")
 
     snapshots: dict[str, dict] = {}
@@ -418,8 +436,16 @@ def main() -> None:
         snapshot["maxAverage"] = round(max_average, 4)
         snapshot["teamCount"] = len(snapshot["standings"])
 
+    built_at = (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
     payload = {
         "generatedAt": latest,
+        "builtAt": built_at,
         "latestDate": latest,
         "dates": all_dates,
         "snapshots": snapshots,
@@ -438,6 +464,17 @@ def main() -> None:
         + ";\n",
         encoding="utf-8",
     )
+
+    meta = {
+        "latestDate": latest,
+        "builtAt": built_at,
+        "teamCount": len(teams),
+        "snapshotCount": len(all_dates),
+        "dataBytes": OUT.stat().st_size,
+        "source": payload["source"]["repo"],
+    }
+    META.parent.mkdir(parents=True, exist_ok=True)
+    META.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     size_mb = OUT.stat().st_size / (1024 * 1024)
     print(f"Wrote {OUT} ({size_mb:.2f} MB)")
