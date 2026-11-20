@@ -60,3 +60,7 @@ fi
 
 mkdir -p "$APP_DIR/data"
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+# A private-repo remote URL can contain a token; keep it out of other users' reach.
+if [ -f "$APP_DIR/.git/config" ]; then
+  chmod 600 "$APP_DIR/.git/config" || true
+fi

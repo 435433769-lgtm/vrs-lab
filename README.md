@@ -16,7 +16,7 @@
 - `scripts/build_data.py` — 数据管线
 - `scripts/validate_data.py` — 数值不变量校验
 - `scripts/dev_server.py` — 本地服务：静态文件白名单、实时更新 API、自动重建
-- `deploy/` — 一键部署脚本、systemd 服务、Nginx 配置
+- `deploy/` — 一键部署、更新、安全检查脚本，systemd 服务，Nginx 配置
 
 ## 功能
 
@@ -102,6 +102,27 @@ curl http://127.0.0.1:5173/api/meta
 ```bash
 sudo certbot --nginx -d vrs.example.com --redirect
 ```
+
+### 4.1 安全检查
+
+部署完成后可以跑一次基础安全检查：
+
+```bash
+sudo bash /opt/vrs/deploy/security-check.sh
+
+# 已经启用 HTTPS 时，检查线上域名
+BASE=https://vrs.example.com sudo bash /opt/vrs/deploy/security-check.sh
+```
+
+脚本会检查：
+
+- `vrs`、Nginx 是否运行，`5173` 是否只监听本机；
+- 首页、`data.js`、`data/meta.json`、`/api/meta` 是否正常；
+- `.git`、`scripts/`、`data/raw/`、`deploy/`、`README.md` 是否返回 404；
+- `/api/check` 限流、缓存头、gzip、数据包大小一致性；
+- Git remote 是否含明文令牌、`.git/config` 权限、磁盘使用率。
+
+它不会修改配置，但会触发一次正常的更新检查。最后会给出 `[OK]`、`[WARN]`、`[FAIL]` 汇总；有 `[FAIL]` 时按提示处理即可。
 
 ### 5. 自动更新怎么工作
 
