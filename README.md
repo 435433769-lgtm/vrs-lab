@@ -67,21 +67,19 @@ ssh root@你的公网IP
 然后执行：
 
 ```bash
-curl -fsSL https://gitee.com/little-tiger-tooth12/vrs-lab/raw/master/deploy/setup.sh -o /tmp/vrs-setup.sh
+# 安装 git 并拉取代码（推荐）
+sudo apt-get update
+sudo apt-get install -y git
+sudo git clone --depth 1 https://gitee.com/little-tiger-tooth12/vrs-lab.git /opt/vrs
 
 # 有域名：自动申请 Let's Encrypt 证书并开启 HTTPS
-sudo bash /tmp/vrs-setup.sh --domain vrs.example.com --email you@example.com
+sudo bash /opt/vrs/deploy/setup.sh --domain vrs.example.com --email you@example.com
 
 # 没有域名：只启用 HTTP，用公网 IP 访问
-sudo bash /tmp/vrs-setup.sh
+sudo bash /opt/vrs/deploy/setup.sh
 ```
 
-如果 `curl` 下载失败，也可以先克隆仓库再运行：
-
-```bash
-git clone --depth 1 https://gitee.com/little-tiger-tooth12/vrs-lab.git /opt/vrs
-sudo bash /opt/vrs/deploy/setup.sh --domain vrs.example.com --email you@example.com
-```
+如果 `/opt/vrs` 已经存在，`setup.sh` 会自动拉取最新代码并保留服务器上已经构建好的新快照，不需要手动删除目录。
 
 脚本会自动完成：
 
