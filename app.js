@@ -111,8 +111,9 @@
   const live = {
     tone: "checking",
     text: "正在检查更新…",
-    title: "正在连接本地更新服务。",
+    title: "正在连接更新服务。",
     available: true,
+    staticMode: false,
     builtAt: DATA.builtAt || null,
   };
   let liveTimer = null;
@@ -1797,12 +1798,40 @@
     liveTimer = window.setTimeout(() => checkForUpdates(false), delay);
   }
 
-  async function fetchMeta() {
-    const res = await fetch(`/api/meta?_=${Date.now()}`, { cache: "no-store" });
+  async function fetchJson(url) {
+    const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const type = res.headers.get("content-type") || "";
     if (!type.includes("application/json")) throw new Error("响应不是 JSON");
     return res.json();
+  }
+
+  async function fetchMeta() {
+    try {
+      const meta = await fetchJson(`/api/meta?_=${Date.now()}`);
+      meta.__mode = "live";
+      return meta;
+    } catch (apiError) {
+      // Static hosting (Nginx without the updater, Gitee Pages, …) can still
+      // expose the last build metadata, so the page keeps hot-swapping.
+      try {
+        const meta = await fetchJson(`data/meta.json?_=${Date.now()}`);
+        meta.__mode = "static";
+        return meta;
+      } catch (staticError) {
+        throw apiError;
+      }
+    }
+  }
+
+  function syncedText() {
+    return `${live.staticMode ? "静态托管" : "已同步"} · ${shortDate(DATA.latestDate)}`;
+  }
+
+  function syncedTitle() {
+    return live.staticMode
+      ? `通过静态 meta.json 检查更新。最新官方快照：${DATA.latestDate}。`
+      : `已与更新服务同步。最新官方快照：${DATA.latestDate}。`;
   }
 
   async function adoptBundle(version) {
@@ -1810,6 +1839,9 @@
     if (!res.ok) throw new Error(`data.js HTTP ${res.status}`);
     const text = await res.text();
     const next = new Function(`${text}\nreturn window.VRS_DATA;`)();
+    if (version && next.builtAt && next.builtAt !== version) {
+      throw new Error("数据包版本不一致");
+    }
     adoptData(next);
   }
 
@@ -1828,8 +1860,8 @@
 
     live.builtAt = DATA.builtAt || null;
     live.tone = "synced";
-    live.text = `已同步 · ${shortDate(DATA.latestDate)}`;
-    live.title = `已与本地更新服务同步。最新官方快照：${DATA.latestDate}。`;
+    live.text = syncedText();
+    live.title = syncedTitle();
     render();
     showToast(`已载入新的官方快照：${dateLabel(DATA.latestDate)}`, 5000);
   }
@@ -1840,26 +1872,46 @@
       return;
     }
     liveBusy = true;
-    if (manual) setLive("checking", "正在检查…", "正在向本地服务查询最新快照。");
+    if (manual) setLive("checking", "正在检查…", "正在查询最新快照。");
+    let rateLimited = false;
     try {
+      let checkStarted = false;
+      if (manual && !live.staticMode) {
+        try {
+          const res = await fetch("/api/check", { method: "POST", cache: "no-store" });
+          if (res.status === 429) {
+            rateLimited = true;
+            showToast("检查过于频繁，请稍后再试。");
+          } else if (res.ok) {
+            const payload = await res.json().catch(() => ({}));
+            checkStarted = payload.started === true || payload.reason === "already running";
+          }
+        } catch (err) {
+          // Static hosting: no POST endpoint, fall through to meta polling.
+        }
+      }
+      if (checkStarted) {
+        setLive("building", "正在检查官方数据源…", "更新服务正在检查 Valve 仓库。");
+        schedulePoll(5000);
+        return;
+      }
       const meta = await fetchMeta();
+      const staticMode = meta.__mode === "static";
       live.available = true;
+      live.staticMode = staticMode;
+      const pollDelay = staticMode ? 300000 : 60000;
 
       if (meta.lastError) {
         setLive("warn", "更新失败 · 使用缓存", meta.lastError);
         schedulePoll(120000);
       } else if (meta.building || meta.checking) {
-        setLive("building", "正在检查官方数据源…", "本地服务正在检查 Valve 仓库。");
+        setLive("building", "正在检查官方数据源…", "更新服务正在检查 Valve 仓库。");
         schedulePoll(8000);
       } else if (meta.builtAt && meta.builtAt !== (live.builtAt || DATA.builtAt)) {
         if (DATA.builtAt === meta.builtAt) {
           live.builtAt = meta.builtAt;
-          setLive(
-            "synced",
-            `已同步 · ${shortDate(DATA.latestDate)}`,
-            `已与本地更新服务同步。最新官方快照：${DATA.latestDate}。`,
-          );
-          schedulePoll(60000);
+          setLive("synced", syncedText(), syncedTitle());
+          schedulePoll(pollDelay);
         } else {
           setLive("building", "发现新快照 · 加载中…", "正在下载重新构建的数据包。");
           try {
@@ -1867,26 +1919,22 @@
           } catch (err) {
             setLive("warn", "请刷新页面更新", `无法加载新数据包：${err.message}`);
           }
-          schedulePoll(60000);
+          schedulePoll(pollDelay);
         }
       } else {
-        setLive(
-          "synced",
-          `已同步 · ${shortDate(DATA.latestDate)}`,
-          `已与本地更新服务同步。最新官方快照：${DATA.latestDate}。`,
-        );
-        schedulePoll(60000);
-        if (manual) showToast("已是最新版本。");
+        setLive("synced", syncedText(), syncedTitle());
+        schedulePoll(pollDelay);
+        if (manual && !rateLimited) showToast("已是最新版本。");
       }
     } catch (err) {
       live.available = false;
       setLive(
         "offline",
         "静态版本",
-        "实时更新需要本地 Python 服务（python scripts/dev_server.py）。",
+        "没有找到更新信息。页面会继续使用当前数据包；自动更新需要更新服务或静态 meta.json。",
       );
       schedulePoll(300000);
-      if (manual) showToast("实时更新需要本地 Python 服务。");
+      if (manual) showToast("暂时无法检查更新。");
     } finally {
       liveBusy = false;
     }
@@ -1894,7 +1942,7 @@
 
   function initLiveUpdates() {
     if (window.location.protocol === "file:") {
-      setLive("offline", "静态版本", "实时更新需要本地 Python 服务。");
+      setLive("offline", "静态版本", "直接打开本地文件时无法检查更新。");
       return;
     }
     window.setTimeout(() => checkForUpdates(false), 1500);

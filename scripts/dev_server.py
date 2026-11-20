@@ -8,14 +8,14 @@ Endpoints:
     GET  /api/meta   current build metadata + updater status (JSON)
     POST /api/check  ask the updater to check the official repository now
 
-The static prototype keeps working without these endpoints, it just stops
-auto-updating (for example on Gitee Pages).
+Only the public front-end files are served. Everything else in the repository
+(``.git``, ``scripts/``, ``data/raw/`` …) stays private. The static prototype
+keeps working without these endpoints, it just stops auto-updating.
 """
 
 from __future__ import annotations
 
 import argparse
-import functools
 import http.server
 import json
 import os
@@ -37,6 +37,22 @@ import build_data  # noqa: E402  (needs SCRIPTS on sys.path)
 ASSETS = ("styles.css", "data.js", "app.js")
 META = ROOT / "data" / "meta.json"
 LOG = ROOT / "data" / "update.log"
+
+# Exact whitelist: path -> (file on disk, content type). No directory listings
+# and no way to reach anything outside this map.
+STATIC = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/index.html": ("index.html", "text/html; charset=utf-8"),
+    "/app.js": ("app.js", "application/javascript; charset=utf-8"),
+    "/styles.css": ("styles.css", "text/css; charset=utf-8"),
+    "/data.js": ("data.js", "application/javascript; charset=utf-8"),
+    "/data/meta.json": ("data/meta.json", "application/json; charset=utf-8"),
+    "/favicon.ico": ("favicon.ico", "image/x-icon"),
+}
+
+CHECK_COOLDOWN = 60  # seconds between manual POST /api/check calls per client
+CHECK_REQUEST_LOCK = threading.Lock()
+CHECK_REQUESTS: dict[str, float] = {}
 
 STATE_LOCK = threading.Lock()
 CHECK_LOCK = threading.Lock()
@@ -88,7 +104,10 @@ def run_build() -> None:
             timeout=3600,
             env=env,
         )
-        LOG.write_text((proc.stdout or "") + "\n" + (proc.stderr or ""), encoding="utf-8")
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        build_data.atomic_write(
+            LOG, (proc.stdout or "") + "\n" + (proc.stderr or "")
+        )
         if proc.returncode != 0:
             raise RuntimeError(f"build_data.py exited with {proc.returncode}")
 
@@ -163,23 +182,70 @@ def versioned_index() -> bytes:
     return html.encode("utf-8")
 
 
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def end_headers(self) -> None:  # noqa: D102
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
-        super().end_headers()
+class Handler(http.server.BaseHTTPRequestHandler):
+    server_version = "VRSLab"
+    sys_version = ""
 
-    def send_json(self, payload: dict, status: int = 200) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    def request_path(self) -> str:
+        return urllib.parse.unquote(urllib.parse.urlparse(self.path).path)
+
+    def send_body(
+        self,
+        body: bytes,
+        content_type: str,
+        cache_control: str,
+        status: int = 200,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", cache_control)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "same-origin")
+        for key, value in (extra_headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def send_json(
+        self,
+        payload: dict,
+        status: int = 200,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_body(
+            body,
+            "application/json; charset=utf-8",
+            "no-store",
+            status=status,
+            extra_headers=extra_headers,
+        )
+
+    def serve_static(self, path: str) -> None:
+        name, content_type = STATIC[path]
+        if name == "index.html":
+            body = versioned_index()
+            cache = "no-cache"
+        else:
+            try:
+                body = (ROOT / name).read_bytes()
+            except OSError:
+                self.send_json({"error": "not found"}, status=404)
+                return
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            if name == "data/meta.json":
+                cache = "no-cache"
+            elif "v" in query:
+                cache = "public, max-age=31536000, immutable"
+            else:
+                cache = "no-cache"
+        self.send_body(body, content_type, cache)
 
     def do_GET(self) -> None:  # noqa: D102
-        path = urllib.parse.urlparse(self.path).path
+        path = self.request_path()
         if path == "/api/meta":
             meta = read_meta() or {}
             with STATE_LOCK:
@@ -187,26 +253,55 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             meta["now"] = utc_now()
             self.send_json(meta)
             return
-        if path in ("/", "/index.html"):
-            body = versioned_index()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+        if path in STATIC:
+            self.serve_static(path)
             return
-        super().do_GET()
+        self.send_json({"error": "not found"}, status=404)
+
+    def do_HEAD(self) -> None:  # noqa: D102
+        path = self.request_path()
+        if path == "/api/meta":
+            self.send_json({"ok": True})
+            return
+        if path in STATIC:
+            self.serve_static(path)
+            return
+        self.send_json({"error": "not found"}, status=404)
 
     def do_POST(self) -> None:  # noqa: D102
-        path = urllib.parse.urlparse(self.path).path
-        if path == "/api/check":
-            if STATE["building"] or STATE["checking"]:
-                self.send_json({"ok": True, "started": False, "reason": "already running"})
-                return
-            threading.Thread(target=check_once, daemon=True).start()
-            self.send_json({"ok": True, "started": True})
+        path = self.request_path()
+        if path != "/api/check":
+            self.send_json({"error": "not found"}, status=404)
             return
-        self.send_error(404)
+
+        # Nginx sets X-Real-IP; fall back to the socket address for local use.
+        client = self.headers.get("X-Real-IP") or self.client_address[0]
+        now = time.monotonic()
+        with CHECK_REQUEST_LOCK:
+            elapsed = now - CHECK_REQUESTS.get(client, 0.0)
+            if elapsed < CHECK_COOLDOWN:
+                retry_after = max(1, int(CHECK_COOLDOWN - elapsed) + 1)
+                self.send_json(
+                    {"ok": False, "started": False, "reason": "rate limited"},
+                    status=429,
+                    extra_headers={"Retry-After": str(retry_after)},
+                )
+                return
+            CHECK_REQUESTS[client] = now
+            if len(CHECK_REQUESTS) > 1000:
+                cutoff = now - CHECK_COOLDOWN
+                for ip, stamp in list(CHECK_REQUESTS.items()):
+                    if stamp < cutoff:
+                        del CHECK_REQUESTS[ip]
+
+        with STATE_LOCK:
+            busy = STATE["building"] or STATE["checking"]
+        if busy:
+            self.send_json({"ok": True, "started": False, "reason": "already running"})
+            return
+
+        threading.Thread(target=check_once, daemon=True).start()
+        self.send_json({"ok": True, "started": True})
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002
         pass
@@ -219,8 +314,8 @@ def main() -> None:
     parser.add_argument(
         "--interval",
         type=int,
-        default=1800,
-        help="seconds between official repository checks (default 1800)",
+        default=3600,
+        help="seconds between official repository checks (default 3600)",
     )
     parser.add_argument("--no-watch", action="store_true", help="serve only, never rebuild")
     args = parser.parse_args()
@@ -228,9 +323,8 @@ def main() -> None:
     if not args.no_watch:
         threading.Thread(target=updater_loop, args=(args.interval,), daemon=True).start()
 
-    handler = functools.partial(Handler, directory=str(ROOT))
-    with http.server.ThreadingHTTPServer((args.bind, args.port), handler) as httpd:
-        print(f"Serving {ROOT} on http://{args.bind}:{args.port} (no-store)")
+    with http.server.ThreadingHTTPServer((args.bind, args.port), Handler) as httpd:
+        print(f"Serving {ROOT} on http://{args.bind}:{args.port}")
         if not args.no_watch:
             print(f"Watching Valve's repository every {args.interval}s; POST /api/check to check now.")
         httpd.serve_forever()

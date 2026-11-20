@@ -10,3 +10,6 @@ __pycache__/
 .vscode/
 .idea/
 *.log
+
+# Atomic write temp files
+.*.tmp

@@ -1,0 +1,27 @@
+[Unit]
+Description=VRS Lab - Valve Regional Standings explorer
+Documentation=https://gitee.com/little-tiger-tooth12/vrs-lab
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vrs
+Group=vrs
+WorkingDirectory=/opt/vrs
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+ExecStart=/usr/bin/python3 /opt/vrs/scripts/dev_server.py --bind 127.0.0.1 --port 5173 --interval 3600
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+# Keep the service confined to the application directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/vrs
+
+[Install]
+WantedBy=multi-user.target

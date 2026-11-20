@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -33,6 +35,31 @@ REGIONS = {
     "americas": "Americas",
     "asia": "Asia",
 }
+
+
+def atomic_write(path: Path, text: str) -> None:
+    """Write text to a temp file in the same directory, then swap it in.
+
+    Readers either see the previous complete file or the new complete file,
+    never a partially written bundle while a rebuild is running.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+    )
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def fetch(path: str) -> str:
@@ -458,23 +485,22 @@ def main() -> None:
         },
     }
 
-    OUT.write_text(
+    bundle = (
         "window.VRS_DATA = "
         + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        + ";\n",
-        encoding="utf-8",
+        + ";\n"
     )
+    atomic_write(OUT, bundle)
 
     meta = {
         "latestDate": latest,
         "builtAt": built_at,
         "teamCount": len(teams),
         "snapshotCount": len(all_dates),
-        "dataBytes": OUT.stat().st_size,
+        "dataBytes": len(bundle.encode("utf-8")),
         "source": payload["source"]["repo"],
     }
-    META.parent.mkdir(parents=True, exist_ok=True)
-    META.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write(META, json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
 
     size_mb = OUT.stat().st_size / (1024 * 1024)
     print(f"Wrote {OUT} ({size_mb:.2f} MB)")

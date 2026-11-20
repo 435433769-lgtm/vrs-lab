@@ -15,7 +15,8 @@
 - `data/meta.json` — 构建元数据（`latestDate`、`builtAt`、队伍数等），供更新服务和页面读取
 - `scripts/build_data.py` — 数据管线
 - `scripts/validate_data.py` — 数值不变量校验
-- `scripts/dev_server.py` — 本地服务：禁用缓存、实时更新 API、自动重建
+- `scripts/dev_server.py` — 本地服务：静态文件白名单、实时更新 API、自动重建
+- `deploy/` — 一键部署脚本、systemd 服务、Nginx 配置
 
 ## 功能
 
@@ -32,19 +33,126 @@ python scripts/dev_server.py --port 5173
 # 然后打开 http://127.0.0.1:5173/
 ```
 
-`dev_server.py` 会发送 `no-store` 响应头，并在资源 URL 后追加文件修改时间，因此修改后刷新即可生效。直接用 `python -m http.server 5173 --bind 127.0.0.1` 也能打开页面，但浏览器可能缓存旧的 `data.js` / `app.js`，而且不会自动更新。
+`dev_server.py` 只为公开页面文件提供访问，并给 HTML 和 `data/meta.json` 设置 `no-cache`，静态资源则按文件修改时间追加 `?v=`，因此修改后刷新即可生效。直接用 `python -m http.server 5173 --bind 127.0.0.1` 也能打开页面，但浏览器可能缓存旧的 `data.js` / `app.js`，而且不会自动更新。
+
+## 部署上线（腾讯云轻量 · 香港）
+
+推荐配置：**腾讯云轻量应用服务器，中国香港，Ubuntu 22.04，1 核 1G / 20GB SSD / 30Mbps**。香港节点不需要 ICP 备案，买完即可用公网 IP 访问；30Mbps 带宽能让约 6.5MB 的 `data.js` 在几秒内完成首次加载。活动价大约 24–35 元/月，年付约 300–400 元。
+
+### 1. 购买与放行端口
+
+1. 注册腾讯云并完成实名认证，进入“轻量应用服务器” → 新建。
+2. 地域选“中国香港”，镜像选 **Ubuntu Server 22.04 LTS 64bit**，套餐选 1 核 1G。
+3. 设置 root 密码，记下公网 IP。
+4. 在轻量控制台 → 服务器 → 防火墙，放行 **TCP 22、80、443**。
+
+### 2. 准备域名（可选，但推荐）
+
+在域名服务商处添加一条 **A 记录**，例如：
+
+| 主机记录 | 记录类型 | 记录值 |
+| --- | --- | --- |
+| `vrs` | A | 你的服务器公网 IP |
+
+如果使用 Cloudflare，申请证书期间必须把代理状态设为 **仅 DNS（灰云）**，否则 Let's Encrypt 验证会失败。证书签发成功后再决定是否开启代理。
+
+### 3. 一键安装
+
+在腾讯云控制台点“登录”，打开网页终端（OrcaTerm），或用 PowerShell：
+
+```powershell
+ssh root@你的公网IP
+```
+
+然后执行：
+
+```bash
+curl -fsSL https://gitee.com/little-tiger-tooth12/vrs-lab/raw/master/deploy/setup.sh -o /tmp/vrs-setup.sh
+
+# 有域名：自动申请 Let's Encrypt 证书并开启 HTTPS
+sudo bash /tmp/vrs-setup.sh --domain vrs.example.com --email you@example.com
+
+# 没有域名：只启用 HTTP，用公网 IP 访问
+sudo bash /tmp/vrs-setup.sh
+```
+
+如果 `curl` 下载失败，也可以先克隆仓库再运行：
+
+```bash
+git clone --depth 1 https://gitee.com/little-tiger-tooth12/vrs-lab.git /opt/vrs
+sudo bash /opt/vrs/deploy/setup.sh --domain vrs.example.com --email you@example.com
+```
+
+脚本会自动完成：
+
+- 安装 `git`、`python3`、`nginx`、`certbot`；
+- 创建专用运行用户 `vrs`，把仓库拉取到 `/opt/vrs`；
+- 写入并启动 `vrs.service`（开机自启、崩溃自动重启）；
+- 写入 Nginx 站点（gzip、静态资源长缓存、API 反向代理、`/api/check` 限流）；
+- 有域名时运行 `certbot --nginx` 申请证书并强制跳转 HTTPS；
+- 做一次本地健康检查，失败时打印服务日志。
+
+### 4. 验证
+
+```bash
+systemctl status vrs --no-pager
+curl http://127.0.0.1:5173/api/meta
+```
+
+浏览器打开 `https://你的域名/` 或 `http://你的公网IP/`，侧边栏应显示绿色的“已同步 · 11月2日”。点击状态按钮可手动检查更新（有 60 秒冷却）。如果证书申请失败，先确认 DNS 已生效、Cloudflare 代理已关闭、80/443 已放行，然后重试：
+
+```bash
+sudo certbot --nginx -d vrs.example.com --redirect
+```
+
+### 5. 自动更新怎么工作
+
+服务器上的 `dev_server.py` 由 systemd 常驻，每小时检查一次 Valve 官方仓库。只有发现比本地更新的快照日期时才重新构建；`data.js` 和 `data/meta.json` 使用临时文件 + 原子替换，访问者不会下载到半个文件。已打开的页面每 60 秒查询一次 `/api/meta`，发现新的 `builtAt` 后热切换到新数据包，不需要手动操作。
+
+如果 `/api/meta` 不可用，前端会退回到静态 `data/meta.json`（每 5 分钟检查一次）。因此以后即使改成“Nginx 静态托管 + 定时构建”，页面仍然能自动发现新快照。
+
+### 6. 日常维护
+
+```bash
+# 更新代码并重启
+sudo bash /opt/vrs/deploy/update.sh
+
+# 如果本次更新修改了 deploy/nginx.conf，再运行一次部署脚本让 Nginx 配置生效
+sudo bash /opt/vrs/deploy/setup.sh --domain vrs.example.com --email you@example.com
+
+# 重启 / 查看状态
+sudo systemctl restart vrs
+systemctl status vrs --no-pager
+
+# 查看运行日志与最近一次构建日志
+journalctl -u vrs -n 100 --no-pager
+tail -n 50 /opt/vrs/data/update.log
+
+# Nginx 日志
+tail -n 50 /var/log/nginx/access.log
+tail -n 50 /var/log/nginx/error.log
+```
+
+腾讯云控制台还支持给服务器做快照备份，建议在修改配置前手动打一个快照。当前数据包和历史快照都保存在 `/opt/vrs`，`data/raw/` 是可重新下载的缓存。
+
+### 7. 安全与成本
+
+- Python 服务只监听 `127.0.0.1:5173`，公网只能通过 Nginx 访问；
+- 只公开 `index.html`、`app.js`、`styles.css`、`data.js`、`data/meta.json`、`favicon.ico`，`.git`、`scripts/`、`data/raw/` 不会被下载；
+- `POST /api/check` 同时受 Nginx 限流和应用内 60 秒冷却保护；
+- 服务器约 300–400 元/年，域名约 10–30 元/年，HTTPS 免费。
 
 ## 实时更新
 
-本地服务每 30 分钟检查一次 Valve 官方仓库（可用 `--interval` 调整，最低 60 秒）。发现更新的快照日期时，它会运行 `scripts/build_data.py` 并写入 `data/meta.json`；已打开的页面会检测到新的 `builtAt`，并在不整页刷新的情况下热切换到新的 `data.js`。
+本地或服务器上的服务默认每 1 小时检查一次 Valve 官方仓库（可用 `--interval` 调整，最低 60 秒）。发现更新的快照日期时，它会运行 `scripts/build_data.py` 并原子写入 `data.js` 与 `data/meta.json`；已打开的页面会检测到新的 `builtAt`，并在不整页刷新的情况下热切换到新的 `data.js`。
 
 - `GET /api/meta` — 构建元数据与更新状态（`checking`、`building`、`lastCheck`、`remoteLatest`、`lastError`）
-- `POST /api/check` — 立即触发一次检查
-- 侧边栏状态按钮 — 点击可手动检查；绿色表示已同步，橙色表示正在检查或重建，灰色表示无法连接本地服务（静态托管）
+- `POST /api/check` — 立即触发一次检查（同一 IP 60 秒内只接受一次）
+- 侧边栏状态按钮 — 点击可手动检查；绿色表示已同步，橙色表示正在检查或重建，灰色表示没有找到更新信息
 - `data/update.log` — 最近一次自动重建的输出日志
 - `--no-watch` — 只提供静态文件，不检查、不重建
 
-检查失败后会在 5 分钟后重试；正常检查则等待配置的间隔。如果页面以静态方式托管（Gitee Pages、`python -m http.server`），侧边栏会显示“静态版本”，并继续使用上一次生成的 `data.js`；要发布新月份，需要重新构建并重新部署。
+检查失败后会在 5 分钟后重试；正常检查则等待配置的间隔。如果页面以纯静态方式托管（Gitee Pages、`python -m http.server`），前端会尝试读取静态 `data/meta.json`，侧边栏显示“静态托管”，并继续使用上一次生成的 `data.js`；要发布新月份，需要重新构建并重新部署，或者用定时任务更新 `data.js` 和 `data/meta.json`。
 
 ## 重建数据
 
