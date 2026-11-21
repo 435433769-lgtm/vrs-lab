@@ -224,6 +224,7 @@ button { cursor: pointer; }
   transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
 }
 .ghost-btn:hover { color: var(--text); border-color: #354156; background: rgba(255, 255, 255, 0.03); }
+.lang-btn { min-width: 48px; justify-content: center; font-weight: 500; letter-spacing: 0.02em; }
 
 .icon-btn {
   display: none;
@@ -912,9 +913,14 @@ tbody tr:hover .mini-factors i { opacity: 1; }
 @media (max-width: 640px) {
   .hero-stats { grid-template-columns: 1fr 1fr; }
   .hero h1 { font-size: 40px; }
+  .topbar { gap: 8px; padding: 10px 12px; }
+  .topbar-title { max-width: 80px; overflow: hidden; text-overflow: ellipsis; }
+  .topbar-actions { gap: 6px; }
   .topbar-actions .ghost-btn { display: none; }
-  .search { width: 150px; }
-  .search:focus { width: 180px; }
+  .topbar-actions .lang-btn { display: inline-flex; }
+  .search { width: 112px; padding-left: 28px; padding-right: 8px; }
+  .search:focus { width: 132px; }
+  .search-icon { left: 9px; }
   .side-stack { grid-template-columns: 1fr; }
   .factor-grid { grid-template-columns: 1fr; }
   .method-grid { grid-template-columns: 1fr; }

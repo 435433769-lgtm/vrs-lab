@@ -5,6 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>VRS Lab — Valve 区域排名，拆开看</title>
   <meta name="description" content="一个非官方的 CS2 Valve 区域排名（VRS）交互浏览器。查看每一分、每个因子和每一场交手记录。">
+  <script>
+    (function () {
+      try {
+        var param = new URLSearchParams(location.search).get("lang");
+        var saved = localStorage.getItem("vrs-lang");
+        var lang = param === "zh" || param === "en" ? param : saved;
+        if (lang !== "zh" && lang !== "en") {
+          lang = (navigator.language || "").toLowerCase().indexOf("zh") === 0 ? "zh" : "en";
+        }
+        document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+        if (lang === "en") {
+          document.title = "VRS Lab — Valve Regional Standings, explained";
+          var description = document.querySelector('meta[name="description"]');
+          if (description) {
+            description.setAttribute("content", "An unofficial, interactive explorer for Counter-Strike 2 Valve Regional Standings. Every point, factor, and head-to-head result.");
+          }
+        }
+      } catch (err) {
+        // Keep the default Chinese title if storage is unavailable.
+      }
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">

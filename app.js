@@ -1,6 +1,79 @@
 (() => {
   "use strict";
 
+  const LANG_KEY = "vrs-lang";
+
+  function detectLang() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const fromUrl = params.get("lang");
+      if (fromUrl === "zh" || fromUrl === "en") return fromUrl;
+    } catch (err) {
+      // URLSearchParams is unavailable in very old browsers.
+    }
+    try {
+      const saved = window.localStorage.getItem(LANG_KEY);
+      if (saved === "zh" || saved === "en") return saved;
+    } catch (err) {
+      // localStorage can be blocked in private mode.
+    }
+    return (navigator.language || "").toLowerCase().startsWith("zh") ? "zh" : "en";
+  }
+
+  let lang = detectLang();
+
+  function isZh() {
+    return lang === "zh";
+  }
+
+  function L(zh, en) {
+    return isZh() ? zh : en;
+  }
+
+  function locale() {
+    return isZh() ? "zh-CN" : "en-US";
+  }
+
+  function applyDocumentLang() {
+    document.documentElement.lang = isZh() ? "zh-CN" : "en";
+    document.title = L(
+      "VRS Lab — Valve 区域排名，拆开看",
+      "VRS Lab — Valve Regional Standings, explained",
+    );
+    const description = document.querySelector('meta[name="description"]');
+    if (description) {
+      description.setAttribute(
+        "content",
+        L(
+          "一个非官方的 CS2 Valve 区域排名（VRS）交互浏览器。查看每一分、每个因子和每一场交手记录。",
+          "An unofficial, interactive explorer for Counter-Strike 2 Valve Regional Standings. Every point, factor, and head-to-head result.",
+        ),
+      );
+    }
+  }
+
+  function setLang(next) {
+    lang = next === "en" ? "en" : "zh";
+    try {
+      window.localStorage.setItem(LANG_KEY, lang);
+    } catch (err) {
+      // Ignore storage failures; the current page still switches.
+    }
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("lang", lang);
+      window.history.replaceState(null, "", url.toString());
+    } catch (err) {
+      // Keep the old URL if the browser cannot build one.
+    }
+    applyDocumentLang();
+    if (live && live.tone === "synced") {
+      live.text = syncedText();
+      live.title = syncedTitle();
+    }
+    render();
+  }
+
   let DATA = window.VRS_DATA;
   const app = document.getElementById("app");
   const toastEl = document.getElementById("toast");
@@ -9,21 +82,18 @@
     app.innerHTML = `
       <div class="content" style="padding-top:80px">
         <div class="panel card">
-          <div class="eyebrow">数据缺失</div>
-          <h1 style="margin-top:10px">请先构建数据</h1>
-          <p class="muted" style="margin-top:10px">运行 <code>python scripts/build_data.py</code> 生成 <code>data.js</code>，然后刷新页面。</p>
+          <div class="eyebrow">${L("数据缺失", "Data missing")}</div>
+          <h1 style="margin-top:10px">${L("请先构建数据", "Run the data build first")}</h1>
+          <p class="muted" style="margin-top:10px">${L(
+            "运行 <code>python scripts/build_data.py</code> 生成 <code>data.js</code>，然后刷新页面。",
+            "Run <code>python scripts/build_data.py</code> to generate <code>data.js</code>, then reload this page.",
+          )}</p>
         </div>
       </div>`;
     return;
   }
 
   const REGIONS = ["Global", "Europe", "Americas", "Asia"];
-  const REGION_LABELS = {
-    Global: "全球",
-    Europe: "欧洲",
-    Americas: "美洲",
-    Asia: "亚洲",
-  };
   const REGION_CLASS = {
     Global: "region-global",
     Europe: "region-europe",
@@ -31,32 +101,46 @@
     Asia: "region-asia",
   };
 
-  const FACTORS = [
-    {
-      key: "bountyOffered",
-      label: "赏金获取",
-      color: "var(--lime)",
-      desc: "赛事奖金，按时间衰减，并以全球参照上限进行折算。",
-    },
-    {
-      key: "bountyCollected",
-      label: "赏金收集",
-      color: "var(--cyan)",
-      desc: "击败对手的质量，依据对手的赏金获取值计算。",
-    },
-    {
-      key: "opponentNetwork",
-      label: "对手网络",
-      color: "var(--violet)",
-      desc: "阵容击败过的、有相关性的不同对手数量。",
-    },
-    {
-      key: "lanWins",
-      label: "LAN 胜场",
-      color: "var(--orange)",
-      desc: "LAN 赛事胜场，按时间与赛事级别加权。",
-    },
-  ];
+  function factorList() {
+    return [
+      {
+        key: "bountyOffered",
+        label: L("赏金获取", "Bounty Offered"),
+        color: "var(--lime)",
+        desc: L(
+          "赛事奖金，按时间衰减，并以全球参照上限进行折算。",
+          "Prize money earned, age-weighted and capped against the global reference.",
+        ),
+      },
+      {
+        key: "bountyCollected",
+        label: L("赏金收集", "Bounty Collected"),
+        color: "var(--cyan)",
+        desc: L(
+          "击败对手的质量，依据对手的赏金获取值计算。",
+          "Quality of opponents beaten, based on their Bounty Offered.",
+        ),
+      },
+      {
+        key: "opponentNetwork",
+        label: L("对手网络", "Opponent Network"),
+        color: "var(--violet)",
+        desc: L(
+          "阵容击败过的、有相关性的不同对手数量。",
+          "How many distinct, relevant opponents a roster has defeated.",
+        ),
+      },
+      {
+        key: "lanWins",
+        label: L("LAN 胜场", "LAN Wins"),
+        color: "var(--orange)",
+        desc: L(
+          "LAN 赛事胜场，按时间与赛事级别加权。",
+          "LAN victories, weighted by recency and event stakes.",
+        ),
+      },
+    ];
+  }
 
   const MAX_COMPARE = 4;
   const TEAM_COLORS = ["#c8ff3d", "#6ee7ff", "#b7a6ff", "#ff9f43"];
@@ -110,8 +194,8 @@
   // Live update status, kept outside render() so polling can refresh it in place.
   const live = {
     tone: "checking",
-    text: "正在检查更新…",
-    title: "正在连接更新服务。",
+    text: L("正在检查更新…", "Checking for updates…"),
+    title: L("正在连接更新服务。", "Contacting the update service."),
     available: true,
     staticMode: false,
     builtAt: DATA.builtAt || null,
@@ -157,9 +241,9 @@
   function dateLabel(value) {
     if (!value) return "—";
     const date = new Date(value + "T00:00:00Z");
-    return date.toLocaleDateString("zh-CN", {
+    return date.toLocaleDateString(locale(), {
       year: "numeric",
-      month: "long",
+      month: isZh() ? "long" : "short",
       day: "numeric",
       timeZone: "UTC",
     });
@@ -168,7 +252,7 @@
   function shortDate(value) {
     if (!value) return "—";
     const date = new Date(value + "T00:00:00Z");
-    return date.toLocaleDateString("zh-CN", {
+    return date.toLocaleDateString(locale(), {
       month: "short",
       day: "numeric",
       timeZone: "UTC",
@@ -176,7 +260,13 @@
   }
 
   function regionLabel(region) {
-    return REGION_LABELS[region] || region || "未知";
+    const labels = {
+      Global: L("全球", "Global"),
+      Europe: L("欧洲", "Europe"),
+      Americas: L("美洲", "Americas"),
+      Asia: L("亚洲", "Asia"),
+    };
+    return labels[region] || region || L("未知", "Unknown");
   }
 
   function regionPill(region) {
@@ -196,7 +286,7 @@
     const out = [];
     let cursor = 0;
     let from = 1;
-    [["stage3", "第三阶段"], ["stage2", "第二阶段"], ["stage1", "第一阶段"]].forEach(([key, label]) => {
+    [["stage3", L("第三阶段", "Stage 3")], ["stage2", L("第二阶段", "Stage 2")], ["stage1", L("第一阶段", "Stage 1")]].forEach(([key, label]) => {
       const size = Number(stages[key]) || 0;
       if (!size) return;
       cursor += size;
@@ -215,7 +305,12 @@
   function qualificationBadge(region, regionalRank) {
     const band = qualForRank(region, regionalRank);
     if (!band) return `<span class="muted-cell">—</span>`;
-    return `<span class="qual-badge qual-${band.key}" title="根据 ${esc(DATA.qualification?.asOf || "")} Major 名额分配推算，并非官方邀请。">${band.label}</span>`;
+    const asOf = esc(DATA.qualification?.asOf || "");
+    const title = L(
+      `根据 ${asOf} Major 名额分配推算，并非官方邀请。`,
+      `Projected from the ${asOf} Major invite allocation. Not an official invitation.`,
+    );
+    return `<span class="qual-badge qual-${band.key}" title="${title}">${band.label}</span>`;
   }
 
   function deltaClass(value) {
@@ -226,7 +321,7 @@
   }
 
   function deltaText(value) {
-    if (value === null || value === undefined) return "新";
+    if (value === null || value === undefined) return L("新", "NEW");
     if (value > 0) return `▲ ${value}`;
     if (value < 0) return `▼ ${Math.abs(value)}`;
     return "—";
@@ -308,11 +403,11 @@
   function topbarTitle() {
     if (route.view === "team") {
       const team = DATA.teams[route.id];
-      return team ? team.name : "战队";
+      return team ? team.name : L("战队", "Team");
     }
-    if (route.view === "compare") return "对比";
-    if (route.view === "methodology") return "方法说明";
-    return "排名";
+    if (route.view === "compare") return L("对比", "Compare");
+    if (route.view === "methodology") return L("方法说明", "Methodology");
+    return L("排名", "Rankings");
   }
 
   function layout(content) {
@@ -324,21 +419,21 @@
             <span class="brand-mark">V</span>
             <span class="brand-copy">
               <strong>VRS LAB</strong>
-              <small>区域排名</small>
+              <small>${L("区域排名", "Regional Standings")}</small>
             </span>
           </a>
 
           <nav class="nav">
-            ${navLink("#/", "排名", "▦", "rankings")}
-            ${navLink("#/compare", "对比", "⇄", "compare")}
-            ${navLink("#/methodology", "方法说明", "◇", "methodology")}
+            ${navLink("#/", L("排名", "Rankings"), "▦", "rankings")}
+            ${navLink("#/compare", L("对比", "Compare"), "⇄", "compare")}
+            ${navLink("#/methodology", L("方法说明", "Methodology"), "◇", "methodology")}
           </nav>
 
           <div class="sidebar-panel">
-            <div class="eyebrow">快照</div>
+            <div class="eyebrow">${L("快照", "Snapshot")}</div>
             <div class="snapshot-date">${esc(DATA.latestDate)}</div>
-            <div class="muted small">${fmtInt(DATA.snapshots[DATA.latestDate]?.teamCount)} 支战队 · ${DATA.dates.length} 个快照</div>
-            <a class="source-link" href="${esc(DATA.source.repo)}" target="_blank" rel="noreferrer">官方数据源 ↗</a>
+            <div class="muted small">${fmtInt(DATA.snapshots[DATA.latestDate]?.teamCount)} ${L("支战队", "teams")} · ${DATA.dates.length} ${L("个快照", "snapshots")}</div>
+            <a class="source-link" href="${esc(DATA.source.repo)}" target="_blank" rel="noreferrer">${L("官方数据源", "Official source")} ↗</a>
             <button class="live-status ${live.tone}" data-action="check-updates" title="${esc(live.title)}">
               <span class="live-dot"></span>
               <span class="live-text">${esc(live.text)}</span>
@@ -346,20 +441,21 @@
           </div>
 
           <div class="sidebar-footer">
-            <span class="status-dot"></span> 非官方原型
+            <span class="status-dot"></span> ${L("非官方原型", "Unofficial prototype")}
           </div>
         </aside>
 
         <main class="main">
           <header class="topbar">
-            <button class="icon-btn" data-action="toggle-menu" aria-label="打开导航">☰</button>
+            <button class="icon-btn" data-action="toggle-menu" aria-label="${L("打开导航", "Open navigation")}">☰</button>
             <div class="topbar-title">${esc(topbarTitle())}</div>
             <div class="topbar-actions">
               <div class="search-wrap">
                 <span class="search-icon">⌕</span>
-                <input id="global-search" class="search" type="search" placeholder="搜索战队或选手…" value="${esc(state.search)}" autocomplete="off">
+                <input id="global-search" class="search" type="search" placeholder="${L("搜索战队或选手…", "Search team or player…")}" value="${esc(state.search)}" autocomplete="off">
               </div>
-              <a class="ghost-btn" href="#/methodology">计算方式</a>
+              <a class="ghost-btn" href="#/methodology">${L("计算方式", "How it works")}</a>
+              <button class="ghost-btn lang-btn" data-action="toggle-lang" title="${L("切换到英文", "Switch to Chinese")}" aria-label="${L("切换到英文", "Switch to Chinese")}">${L("EN", "中文")}</button>
             </div>
           </header>
           <div class="content">${content}</div>
@@ -383,14 +479,14 @@
           ${teams.map((team) => `
             <span class="tray-chip">
               ${esc(team.name)}
-              <button data-action="compare-remove" data-id="${esc(team.id)}" aria-label="移除 ${esc(team.name)}">×</button>
+              <button data-action="compare-remove" data-id="${esc(team.id)}" aria-label="${L("移除", "Remove")} ${esc(team.name)}">×</button>
             </span>`).join("")}
-          ${teams.length < 2 ? `<span class="tray-hint">再选 ${2 - teams.length} 支即可对比</span>` : ""}
+          ${teams.length < 2 ? `<span class="tray-hint">${L(`再选 ${2 - teams.length} 支即可对比`, `Pick ${2 - teams.length} more to compare`)}</span>` : ""}
         </div>
         <div class="tray-actions">
           <span class="tray-count mono">${teams.length}/${MAX_COMPARE}</span>
-          <button class="ghost-btn" data-action="compare-clear">清空</button>
-          <button class="primary-btn" data-action="compare-open" ${teams.length < 2 ? "disabled" : ""}>对比 ${teams.length} 支</button>
+          <button class="ghost-btn" data-action="compare-clear">${L("清空", "Clear")}</button>
+          <button class="primary-btn" data-action="compare-open" ${teams.length < 2 ? "disabled" : ""}>${L(`对比 ${teams.length} 支`, `Compare ${teams.length}`)}</button>
         </div>
       </div>`;
   }
@@ -441,28 +537,28 @@
       <div class="hero-stats">
         <div class="stat">
           <div class="stat-value">${fmtInt(sorted.length)}</div>
-          <div class="stat-label">${state.region === "Global" ? "参与排名战队" : `${regionLabel(state.region)}战队`}</div>
+          <div class="stat-label">${state.region === "Global" ? L("参与排名战队", "Teams ranked") : L(`${regionLabel(state.region)}战队`, `${regionLabel(state.region)} teams`)}</div>
         </div>
         <div class="stat">
           <div class="stat-value lime">${leader ? esc(leader.name) : "—"}</div>
-          <div class="stat-label">当前第一</div>
+          <div class="stat-label">${L("当前第一", "Current leader")}</div>
         </div>
         <div class="stat">
           <div class="stat-value mono">${leader ? fmtInt(leader.points) : "—"}</div>
-          <div class="stat-label">榜首积分</div>
+          <div class="stat-label">${L("榜首积分", "Leader points")}</div>
         </div>
         <div class="stat">
           <div class="stat-value mono">${fmtInt(avgPoints)}</div>
-          <div class="stat-label">平均积分</div>
+          <div class="stat-label">${L("平均积分", "Average points")}</div>
         </div>
       </div>`;
 
     return `
       <section class="hero">
         <div>
-          <div class="eyebrow"><span class="live-dot"></span> CS2 · Valve 区域排名</div>
-          <h1>排名，<em>拆开看。</em></h1>
-          <p class="hero-sub">每一分都有来由。查看 Valve 区域排名背后的因子、比赛和交手结果，不必再啃 Markdown 表格。</p>
+          <div class="eyebrow"><span class="live-dot"></span> ${L("CS2 · Valve 区域排名", "CS2 · Valve Regional Standings")}</div>
+          <h1>${L("排名，<em>拆开看。</em>", "The ranking, <em>explained.</em>")}</h1>
+          <p class="hero-sub">${L("每一分都有来由。查看 Valve 区域排名背后的因子、比赛和交手结果，不必再啃 Markdown 表格。", "Every point has a story. Explore the factors, matches, and head-to-head results behind the Valve Regional Standings — without digging through markdown tables.")}</p>
         </div>
         ${stats}
       </section>
@@ -474,32 +570,35 @@
           `).join("")}
         </div>
 
-        <select class="select" id="snapshot-select" aria-label="快照日期">
+        <select class="select" id="snapshot-select" aria-label="${L("快照日期", "Snapshot date")}">
           ${DATA.dates.slice().reverse().map((item) => `
             <option value="${item}" ${item === date ? "selected" : ""}>${dateLabel(item)}</option>
           `).join("")}
         </select>
 
-        <select class="select" id="sort-select" aria-label="战队排序">
-          <option value="rank" ${state.sort === "rank" ? "selected" : ""}>排序：排名</option>
-          <option value="points" ${state.sort === "points" ? "selected" : ""}>排序：积分</option>
-          <option value="delta" ${state.sort === "delta" ? "selected" : ""}>排序：变动</option>
-          <option value="name" ${state.sort === "name" ? "selected" : ""}>排序：名称</option>
+        <select class="select" id="sort-select" aria-label="${L("战队排序", "Sort teams")}">
+          <option value="rank" ${state.sort === "rank" ? "selected" : ""}>${L("排序：排名", "Sort: Rank")}</option>
+          <option value="points" ${state.sort === "points" ? "selected" : ""}>${L("排序：积分", "Sort: Points")}</option>
+          <option value="delta" ${state.sort === "delta" ? "selected" : ""}>${L("排序：变动", "Sort: Movement")}</option>
+          <option value="name" ${state.sort === "name" ? "selected" : ""}>${L("排序：名称", "Sort: Name")}</option>
         </select>
 
         <div class="toolbar-spacer"></div>
-        <div class="toolbar-note">官方快照 · ${dateLabel(date)}</div>
+        <div class="toolbar-note">${L("官方快照", "Official snapshot")} · ${dateLabel(date)}</div>
       </div>
 
       <div class="rankings-grid">
         <section class="panel">
           <div class="panel-head">
             <div>
-              <div class="panel-title">${regionLabel(state.region)}排名</div>
-              <div class="panel-sub">${fmtInt(sorted.length)} 支战队${query ? `，匹配“${esc(state.search)}”` : ""}</div>
+              <div class="panel-title">${L(`${regionLabel(state.region)}排名`, `${regionLabel(state.region)} standings`)}</div>
+              <div class="panel-sub">${L(
+                `${fmtInt(sorted.length)} 支战队${query ? `，匹配“${esc(state.search)}”` : ""}`,
+                `${fmtInt(sorted.length)} teams${query ? ` matching “${esc(state.search)}”` : ""}`,
+              )}</div>
             </div>
             <div class="panel-head-right">
-              <span class="muted small">点击任意一行查看完整拆解</span>
+              <span class="muted small">${L("点击任意一行查看完整拆解", "Click a row for the full breakdown")}</span>
             </div>
           </div>
 
@@ -509,12 +608,12 @@
                 <tr>
                   <th style="width:34px"></th>
                   <th style="width:54px">#</th>
-                  <th>战队</th>
-                  <th class="col-region">区域</th>
-                  <th class="col-factors" title="赏金获取 · 赏金收集 · 对手网络 · LAN 胜场">因子</th>
-                  <th style="text-align:right">积分</th>
+                  <th>${L("战队", "Team")}</th>
+                  <th class="col-region">${L("区域", "Region")}</th>
+                  <th class="col-factors" title="${L("赏金获取 · 赏金收集 · 对手网络 · LAN 胜场", "Bounty offered · bounty collected · opponent network · LAN wins")}">${L("因子", "Profile")}</th>
+                  <th style="text-align:right">${L("积分", "Points")}</th>
                   <th style="width:64px">Δ</th>
-                  <th class="col-trend" style="width:100px">走势</th>
+                  <th class="col-trend" style="width:100px">${L("走势", "Trend")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -523,7 +622,7 @@
                     <td colspan="8">
                       <div class="empty">
                         <div class="empty-icon">⌕</div>
-                        <div>没有符合条件的战队。</div>
+                        <div>${L("没有符合条件的战队。", "No teams match that search.")}</div>
                       </div>
                     </td>
                   </tr>
@@ -533,8 +632,8 @@
           </div>
 
           <div class="table-footer">
-            <span>显示 ${fmtInt(visible.length)} / ${fmtInt(sorted.length)} 支战队</span>
-            ${state.limit < sorted.length ? `<button class="ghost-btn" data-action="show-all">显示全部</button>` : ""}
+            <span>${L(`显示 ${fmtInt(visible.length)} / ${fmtInt(sorted.length)} 支战队`, `Showing ${fmtInt(visible.length)} of ${fmtInt(sorted.length)} teams`)}</span>
+            ${state.limit < sorted.length ? `<button class="ghost-btn" data-action="show-all">${L("显示全部", "Show all")}</button>` : ""}
           </div>
         </section>
 
@@ -571,7 +670,7 @@
     return `
       <tr data-team-id="${esc(team.id)}">
         <td>
-          <input class="compare-check" type="checkbox" data-action="toggle-compare" data-id="${esc(team.id)}" ${checked ? "checked" : ""} aria-label="对比 ${esc(team.name)}">
+          <input class="compare-check" type="checkbox" data-action="toggle-compare" data-id="${esc(team.id)}" ${checked ? "checked" : ""} aria-label="${L("对比", "Compare")} ${esc(team.name)}">
         </td>
         <td><span class="rank-badge ${rankClass}">${team.globalRank}</span></td>
         <td>
@@ -593,14 +692,21 @@
     const rank = Number(team.regionalRank);
     const band = qualCutoffs(state.region).find((item) => item.to === rank);
     if (!band) return "";
-    const asOf = DATA.qualification?.asOf || "最近公布";
+    const asOf = DATA.qualification?.asOf || L("最近公布", "latest published");
+    const rankNote = band.from === band.to
+      ? L(`第 ${band.to} 名`, `Rank ${band.to}`)
+      : L(`第 ${band.from}–${band.to} 名`, `Ranks ${band.from}–${band.to}`);
+    const slotNote = L(
+      `${band.size} 个名额`,
+      `${band.size} ${band.size === 1 ? "slot" : "slots"}`,
+    );
     return `
       <tr class="qual-row">
         <td colspan="8">
           <div class="qual-line">
-            <span class="qual-line-label qual-${band.key}">${band.label}晋级线</span>
+            <span class="qual-line-label qual-${band.key}">${L(`${band.label}晋级线`, `${band.label} line`)}</span>
             <span class="qual-line-rule"></span>
-            <span class="qual-line-note">${band.from === band.to ? `第 ${band.to} 名` : `第 ${band.from}–${band.to} 名`} · ${band.size} 个名额 · ${esc(asOf)}</span>
+            <span class="qual-line-note">${rankNote} · ${slotNote} · ${esc(asOf)}</span>
           </div>
         </td>
       </tr>`;
@@ -611,8 +717,8 @@
     if (!team) return `<span class="muted-cell">—</span>`;
     const factors = team.factors || {};
     return `
-      <div class="mini-factors" title="赏金获取、赏金收集、对手网络、LAN 胜场">
-        ${FACTORS.map((factor) => {
+      <div class="mini-factors" title="${L("赏金获取、赏金收集、对手网络、LAN 胜场", "Bounty offered, bounty collected, opponent network, LAN wins")}">
+        ${factorList().map((factor) => {
           const value = Math.max(0.02, Math.min(1, Number(factors[factor.key]) || 0));
           return `<i style="height:${(value * 100).toFixed(0)}%;background:${factor.color}"></i>`;
         }).join("")}
@@ -642,7 +748,7 @@
     const last = points[points.length - 1];
 
     return `
-      <svg class="sparkline" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="排名走势">
+      <svg class="sparkline" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${L("排名走势", "Rank trend")}">
         <polygon class="spark-area" points="${area}" fill="${color}"></polygon>
         <polyline points="${line}" stroke="${color}"></polyline>
         <title>${esc(first.date)}: #${first.globalRank} → ${esc(last.date)}: #${last.globalRank}</title>
@@ -671,12 +777,12 @@
 
     return `
       <section class="panel side-card">
-        <div class="eyebrow">变动</div>
-        <div class="side-title">上升</div>
-        ${rows(up, "该快照中没有排名上升的战队。")}
+        <div class="eyebrow">${L("变动", "Movement")}</div>
+        <div class="side-title">${L("上升", "Climbers")}</div>
+        ${rows(up, L("该快照中没有排名上升的战队。", "No upward movement in this snapshot."))}
         <div class="divider"></div>
-        <div class="side-title">下降</div>
-        ${rows(down, "该快照中没有排名下降的战队。")}
+        <div class="side-title">${L("下降", "Fallers")}</div>
+        ${rows(down, L("该快照中没有排名下降的战队。", "No downward movement in this snapshot."))}
       </section>`;
   }
 
@@ -695,7 +801,7 @@
 
     return `
       <section class="panel side-card">
-        <div class="eyebrow">区域概览</div>
+        <div class="eyebrow">${L("区域概览", "Region pulse")}</div>
         <div class="side-title">${dateLabel(snapshot.date)}</div>
         ${rows}
       </section>`;
@@ -708,8 +814,8 @@
     const regions = ["Europe", "Americas", "Asia"];
     return `
       <section class="panel side-card">
-        <div class="eyebrow">Major 晋级线</div>
-        <div class="side-title">各区域邀请线</div>
+        <div class="eyebrow">${L("Major 晋级线", "Major path")}</div>
+        <div class="side-title">${L("各区域邀请线", "Invite lines by region")}</div>
         ${regions.map((region) => {
           const bands = qualCutoffs(region);
           if (!bands.length) return "";
@@ -717,7 +823,7 @@
             <div class="mp-region ${active === region ? "active" : ""}">
               <div class="mp-head">
                 ${regionPill(region)}
-                <span class="mono muted small">${bands[bands.length - 1].to} 个名额</span>
+                <span class="mono muted small">${L(`${bands[bands.length - 1].to} 个名额`, `${bands[bands.length - 1].to} ${bands[bands.length - 1].to === 1 ? "slot" : "slots"}`)}</span>
               </div>
               ${bands.map((band) => `
                 <div class="mp-band">
@@ -726,7 +832,7 @@
                 </div>`).join("")}
             </div>`;
         }).join("")}
-        <div class="mp-note">${esc(q.asOf)} 名额分配 · 累计晋级线，并非实时晋级资格。</div>
+        <div class="mp-note">${L(`${esc(q.asOf)} 名额分配 · 累计晋级线，并非实时晋级资格。`, `${esc(q.asOf)} allocation · cumulative lines, not a live qualification.`)}</div>
       </section>`;
   }
 
@@ -734,12 +840,12 @@
     const detailCount = Object.keys(DATA.teams).length;
     return `
       <section class="panel side-card">
-        <div class="eyebrow">数据状态</div>
-        <div class="side-title">${fmtInt(detailCount)} 支有完整详情的阵容</div>
-        <div class="rp-row"><span class="rp-name">已解析快照</span><span class="rp-count">${DATA.dates.length}</span></div>
-        <div class="rp-row"><span class="rp-name">详情失败数</span><span class="rp-count ${DATA.failures.length ? "red" : ""}">${DATA.failures.length}</span></div>
-        <div class="rp-row"><span class="rp-name">数据源</span><span class="rp-count">Valve</span></div>
-        <div class="rp-row"><span class="rp-name">赛事数据</span><span class="rp-count">HLTV</span></div>
+        <div class="eyebrow">${L("数据状态", "Data health")}</div>
+        <div class="side-title">${L(`${fmtInt(detailCount)} 支有完整详情的阵容`, `${fmtInt(detailCount)} detailed rosters`)}</div>
+        <div class="rp-row"><span class="rp-name">${L("已解析快照", "Snapshots parsed")}</span><span class="rp-count">${DATA.dates.length}</span></div>
+        <div class="rp-row"><span class="rp-name">${L("详情失败数", "Detail failures")}</span><span class="rp-count ${DATA.failures.length ? "red" : ""}">${DATA.failures.length}</span></div>
+        <div class="rp-row"><span class="rp-name">${L("数据源", "Source")}</span><span class="rp-count">Valve</span></div>
+        <div class="rp-row"><span class="rp-name">${L("赛事数据", "Event data")}</span><span class="rp-count">HLTV</span></div>
       </section>`;
   }
 
@@ -756,9 +862,9 @@
       return `
         <div class="empty" style="padding-top:80px">
           <div class="empty-icon">◌</div>
-          <h2>未找到该阵容</h2>
-          <p class="muted" style="margin-top:8px">当前数据快照中没有这个阵容。</p>
-          <a class="ghost-btn" style="margin-top:18px;display:inline-flex" href="#/">返回排名</a>
+          <h2>${L("未找到该阵容", "Roster not found")}</h2>
+          <p class="muted" style="margin-top:8px">${L("当前数据快照中没有这个阵容。", "This roster is not in the bundled snapshot.")}</p>
+          <a class="ghost-btn" style="margin-top:18px;display:inline-flex" href="#/">${L("返回排名", "Back to rankings")}</a>
         </div>`;
     }
 
@@ -771,17 +877,17 @@
     const header = `
       <section class="team-hero">
         <div>
-          <a class="back-link" href="#/">← 返回排名</a>
+          <a class="back-link" href="#/">← ${L("返回排名", "Back to rankings")}</a>
           <div class="team-title-row">
             <span class="team-rank-big">#${base.globalRank}</span>
             <div>
               <h1 class="team-title">${esc(base.name)}</h1>
               <div class="team-meta">
                 ${regionPill(base.region)}
-                <span>区域排名 <strong class="mono">#${base.regionalRank || "—"}</strong></span>
+                <span>${L("区域排名", "Regional rank")} <strong class="mono">#${base.regionalRank || "—"}</strong></span>
                 ${qualForRank(base.region, base.regionalRank) ? `<span class="team-meta-qual">${qualificationBadge(base.region, base.regionalRank)}</span>` : ""}
                 <span>·</span>
-                <span>${dateLabel(DATA.latestDate)} 快照</span>
+                <span>${L(`${dateLabel(DATA.latestDate)} 快照`, `${dateLabel(DATA.latestDate)} snapshot`)}</span>
               </div>
             </div>
           </div>
@@ -791,8 +897,8 @@
         </div>
         <div class="team-hero-right">
           <div class="big-points">${fmtInt(base.points)}</div>
-          <div class="points-label">VRS 积分</div>
-          <div class="hero-delta ${previous ? `delta ${deltaClass(delta)}` : "delta flat"}">${previous ? `${deltaText(delta)}，较上一快照` : "该快照中的新阵容"}</div>
+          <div class="points-label">${L("VRS 积分", "VRS points")}</div>
+          <div class="hero-delta ${previous ? `delta ${deltaClass(delta)}` : "delta flat"}">${previous ? L(`${deltaText(delta)}，较上一快照`, `${deltaText(delta)} vs previous snapshot`) : L("该快照中的新阵容", "New roster in this snapshot")}</div>
         </div>
       </section>`;
 
@@ -800,15 +906,15 @@
       return `
         ${header}
         <div class="notice">
-          本原型只为最新快照打包了完整的比赛与因子数据。
-          ${base.detailPath ? ` 你仍然可以查看<a href="${esc(DATA.source.repo)}/blob/main/${esc(base.detailPath)}" target="_blank" rel="noreferrer">官方详情文件</a>。` : ""}
+          ${L("本原型只为最新快照打包了完整的比赛与因子数据。", "Detailed match and factor data is only bundled for the latest snapshot in this prototype.")}
+          ${base.detailPath ? L(` 你仍然可以查看<a href="${esc(DATA.source.repo)}/blob/main/${esc(base.detailPath)}" target="_blank" rel="noreferrer">官方详情文件</a>。`, ` You can still read the <a href="${esc(DATA.source.repo)}/blob/main/${esc(base.detailPath)}" target="_blank" rel="noreferrer">official detail file</a>.`) : ""}
         </div>
         <div class="stack" style="margin-top:16px">
           <section class="panel card">
             <div class="card-head">
               <div>
-                <div class="eyebrow">历史</div>
-                <div class="card-title">排名走势</div>
+                <div class="eyebrow">${L("历史", "History")}</div>
+                <div class="card-title">${L("排名走势", "Rank over time")}</div>
               </div>
             </div>
             ${renderHistoryChart(historySeries([{ ...base, history }], true), state.historyMode)}
@@ -824,9 +930,9 @@
           <section class="panel card">
             <div class="card-head">
               <div>
-                <div class="eyebrow">积分拆解</div>
-                <div class="card-title">最终分数如何构成</div>
-                <div class="card-sub">起始排名分加上交手调整。</div>
+                <div class="eyebrow">${L("积分拆解", "Score breakdown")}</div>
+                <div class="card-title">${L("最终分数如何构成", "How the final value is built")}</div>
+                <div class="card-sub">${L("起始排名分加上交手调整。", "Starting Rank Value plus head-to-head adjustments.")}</div>
               </div>
             </div>
             ${renderWaterfall(team)}
@@ -835,9 +941,9 @@
           <section class="panel card">
             <div class="card-head">
               <div>
-                <div class="eyebrow">四个因子</div>
-                <div class="card-title">起始排名分的输入</div>
-                <div class="card-sub">每个因子都归一化到 0–1。</div>
+                <div class="eyebrow">${L("四个因子", "The four factors")}</div>
+                <div class="card-title">${L("起始排名分的输入", "Starting Rank Value inputs")}</div>
+                <div class="card-sub">${L("每个因子都归一化到 0–1。", "Each factor is normalized to 0–1.")}</div>
               </div>
             </div>
             ${renderFactorCards(team)}
@@ -847,14 +953,14 @@
         <section class="panel card">
           <div class="card-head">
             <div>
-              <div class="eyebrow">历史</div>
-              <div class="card-title">排名走势</div>
-              <div class="card-sub">实线：当前这套阵容（${history.length} 个快照）。虚线：同名战队的所有阵容（${(team.orgHistory || []).length} 个快照）。</div>
+              <div class="eyebrow">${L("历史", "History")}</div>
+              <div class="card-title">${L("排名走势", "Rank over time")}</div>
+              <div class="card-sub">${L(`实线：当前这套阵容（${history.length} 个快照）。虚线：同名战队的所有阵容（${(team.orgHistory || []).length} 个快照）。`, `Solid line: this exact roster (${history.length} snapshots). Dashed line: any roster under the same name (${(team.orgHistory || []).length} snapshots).`)}</div>
             </div>
             <div class="card-head-right">
               <div class="chart-toggle">
-                <button class="${state.historyMode === "globalRank" ? "active" : ""}" data-action="set-history-mode" data-mode="globalRank">全球</button>
-                <button class="${state.historyMode === "regionalRank" ? "active" : ""}" data-action="set-history-mode" data-mode="regionalRank">区域</button>
+                <button class="${state.historyMode === "globalRank" ? "active" : ""}" data-action="set-history-mode" data-mode="globalRank">${L("全球", "Global")}</button>
+                <button class="${state.historyMode === "regionalRank" ? "active" : ""}" data-action="set-history-mode" data-mode="regionalRank">${L("区域", "Regional")}</button>
               </div>
             </div>
           </div>
@@ -897,7 +1003,7 @@
     const finalHeight = Math.max(2, baseline - finalY);
 
     return `
-      <svg class="waterfall-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="从起始排名分到最终排名分的积分瀑布图">
+      <svg class="waterfall-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${L("从起始排名分到最终排名分的积分瀑布图", "Score waterfall from starting rank value to final rank value")}">
         <defs>
           <linearGradient id="startBar" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="#d7e0ea" stop-opacity="0.95"/>
@@ -928,29 +1034,29 @@
         <text x="${x2 + barWidth / 2}" y="${deltaTop - 14}" fill="${deltaColor}" font-family="JetBrains Mono, monospace" font-size="15" font-weight="600" text-anchor="middle">${positive ? "+" : ""}${fmt(h2h, 1)}</text>
         <text x="${x3 + barWidth / 2}" y="${finalY - 14}" fill="#c8ff3d" font-family="JetBrains Mono, monospace" font-size="15" font-weight="600" text-anchor="middle">${fmt(final, 1)}</text>
 
-        <text x="${x1 + barWidth / 2}" y="${height - 16}" fill="#8b96a9" font-family="Inter, sans-serif" font-size="11" text-anchor="middle">起始排名分</text>
-        <text x="${x2 + barWidth / 2}" y="${height - 16}" fill="#8b96a9" font-family="Inter, sans-serif" font-size="11" text-anchor="middle">交手调整</text>
-        <text x="${x3 + barWidth / 2}" y="${height - 16}" fill="#8b96a9" font-family="Inter, sans-serif" font-size="11" text-anchor="middle">最终排名分</text>
+        <text x="${x1 + barWidth / 2}" y="${height - 16}" fill="#8b96a9" font-family="Inter, sans-serif" font-size="11" text-anchor="middle">${L("起始排名分", "Starting Rank")}</text>
+        <text x="${x2 + barWidth / 2}" y="${height - 16}" fill="#8b96a9" font-family="Inter, sans-serif" font-size="11" text-anchor="middle">${L("交手调整", "Head-to-head")}</text>
+        <text x="${x3 + barWidth / 2}" y="${height - 16}" fill="#8b96a9" font-family="Inter, sans-serif" font-size="11" text-anchor="middle">${L("最终排名分", "Final Rank Value")}</text>
       </svg>
-      <div class="waterfall-note">坐标轴经过截断，以便看清交手调整的幅度。这里显示的是排名分，不是表格中四舍五入后的积分。</div>`;
+      <div class="waterfall-note">${L("坐标轴经过截断，以便看清交手调整的幅度。这里显示的是排名分，不是表格中四舍五入后的积分。", "Axis is truncated to make the head-to-head delta visible. Points shown are rank values, not the rounded table points.")}</div>`;
   }
 
   function renderFactorCards(team) {
     const factors = team.factors || {};
     return `
       <div class="factor-grid">
-        ${FACTORS.map((factor) => {
+        ${factorList().map((factor) => {
           const value = Number(factors[factor.key]) || 0;
           const width = Math.max(2, Math.min(100, value * 100));
           let meta = "";
           if (factor.key === "bountyOffered" && team.top10ScaledWinnings !== null) {
-            meta = `${money(team.top10ScaledWinnings)} TOP 10 折算奖金`;
+            meta = L(`${money(team.top10ScaledWinnings)} TOP 10 折算奖金`, `${money(team.top10ScaledWinnings)} top-10 winnings`);
           } else if (factor.key === "bountyCollected") {
-            meta = "击败对手的赏金收集";
+            meta = L("击败对手的赏金收集", "opponent bounty collected");
           } else if (factor.key === "opponentNetwork") {
-            meta = "击败的不同对手数";
+            meta = L("击败的不同对手数", "distinct opponents beaten");
           } else if (factor.key === "lanWins") {
-            meta = "时效加权 LAN 胜场";
+            meta = L("时效加权 LAN 胜场", "age-weighted LAN wins");
           }
 
           return `
@@ -980,7 +1086,7 @@
       const org = team.orgHistory || orgHistoryFor(team.name);
       if (includeOrg && org.length > history.length) {
         series.push({
-          name: `${team.name} · 所有阵容`,
+          name: L(`${team.name} · 所有阵容`, `${team.name} · all rosters`),
           color: "var(--muted-2)",
           history: org,
           dashed: true,
@@ -994,7 +1100,7 @@
     const series = seriesInput.map((item) => ({ ...item, history: item.history || [] }));
     const dates = Array.from(new Set(series.flatMap((item) => item.history.map((entry) => entry.date)))).sort();
     if (dates.length < 2) {
-      return `<div class="empty"><div class="empty-icon">◌</div><div>快照数量不足，无法绘制历史图。</div></div>`;
+      return `<div class="empty"><div class="empty-icon">◌</div><div>${L("快照数量不足，无法绘制历史图。", "Not enough snapshots for a history chart.")}</div></div>`;
     }
 
     const values = series
@@ -1004,7 +1110,7 @@
       }))
       .filter((value) => value !== null && value !== undefined && value > 0);
     if (!values.length) {
-      return `<div class="empty"><div class="empty-icon">◌</div><div>当前视图没有排名历史。</div></div>`;
+      return `<div class="empty"><div class="empty-icon">◌</div><div>${L("当前视图没有排名历史。", "No ranking history for this view.")}</div></div>`;
     }
 
     const width = 920;
@@ -1050,7 +1156,7 @@
       .join("");
 
     return `
-      <svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="排名历史图">
+      <svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${L("排名历史图", "Ranking history chart")}">
         ${grid}
         ${lines}
         ${xLabels}
@@ -1089,14 +1195,14 @@
       <section class="panel match-panel">
         <div class="panel-head">
           <div>
-            <div class="panel-title">比赛贡献</div>
-            <div class="panel-sub">${matches.length} 场比赛 · 高亮行为进入前十因子的比赛</div>
+            <div class="panel-title">${L("比赛贡献", "Match contributions")}</div>
+            <div class="panel-sub">${L(`${matches.length} 场比赛 · 高亮行为进入前十因子的比赛`, `${matches.length} matches · top-10 factor rows highlighted`)}</div>
           </div>
           <div class="panel-head-right">
             <div class="match-filters">
-              <button class="filter-btn ${state.matchFilter === "all" ? "active" : ""}" data-action="set-match-filter" data-filter="all">全部</button>
-              <button class="filter-btn ${state.matchFilter === "wins" ? "active" : ""}" data-action="set-match-filter" data-filter="wins">胜</button>
-              <button class="filter-btn ${state.matchFilter === "losses" ? "active" : ""}" data-action="set-match-filter" data-filter="losses">负</button>
+              <button class="filter-btn ${state.matchFilter === "all" ? "active" : ""}" data-action="set-match-filter" data-filter="all">${L("全部", "All")}</button>
+              <button class="filter-btn ${state.matchFilter === "wins" ? "active" : ""}" data-action="set-match-filter" data-filter="wins">${L("胜", "Wins")}</button>
+              <button class="filter-btn ${state.matchFilter === "losses" ? "active" : ""}" data-action="set-match-filter" data-filter="losses">${L("负", "Losses")}</button>
               <button class="filter-btn ${state.matchFilter === "top10" ? "active" : ""}" data-action="set-match-filter" data-filter="top10">TOP 10</button>
             </div>
           </div>
@@ -1106,20 +1212,20 @@
             <thead>
               <tr>
                 <th>#</th>
-                <th>日期</th>
-                <th>对手</th>
-                <th>胜/负</th>
-                <th>时效</th>
-                <th>赛事</th>
-                <th>赏金</th>
-                <th>对手网络</th>
+                <th>${L("日期", "Date")}</th>
+                <th>${L("对手", "Opponent")}</th>
+                <th>${L("胜/负", "W/L")}</th>
+                <th>${L("时效", "Age")}</th>
+                <th>${L("赛事", "Event")}</th>
+                <th>${L("赏金", "Bounty")}</th>
+                <th>${L("对手网络", "Network")}</th>
                 <th>LAN</th>
-                <th>交手</th>
-                <th>使用阵容</th>
+                <th>${L("交手", "H2H")}</th>
+                <th>${L("使用阵容", "Roster used")}</th>
               </tr>
             </thead>
             <tbody>
-              ${rows || `<tr><td colspan="11"><div class="empty">当前筛选下没有比赛。</div></td></tr>`}
+              ${rows || `<tr><td colspan="11"><div class="empty">${L("当前筛选下没有比赛。", "No matches for this filter.")}</div></td></tr>`}
             </tbody>
           </table>
         </div>
@@ -1143,16 +1249,16 @@
       <section class="panel card">
         <div class="card-head">
           <div>
-            <div class="eyebrow">赏金获取</div>
-            <div class="card-title">TOP 10 折算奖金</div>
-            <div class="card-sub">用于种子分的时效加权奖金。</div>
+            <div class="eyebrow">${L("赏金获取", "Bounty Offered")}</div>
+            <div class="card-title">${L("TOP 10 折算奖金", "Top 10 scaled winnings")}</div>
+            <div class="card-sub">${L("用于种子分的时效加权奖金。", "Age-weighted prize money used for the seed.")}</div>
           </div>
         </div>
         ${winnings.length ? `
           <div class="table-wrap">
             <table class="winnings-table">
               <thead>
-                <tr><th>比赛日期</th><th>时效</th><th style="text-align:right">奖金</th><th style="text-align:right">折算</th></tr>
+                <tr><th>${L("比赛日期", "Event date")}</th><th>${L("时效", "Age")}</th><th style="text-align:right">${L("奖金", "Prize")}</th><th style="text-align:right">${L("折算", "Scaled")}</th></tr>
               </thead>
               <tbody>
                 ${winnings.map((item) => `
@@ -1165,8 +1271,8 @@
               </tbody>
             </table>
           </div>
-          <div class="winnings-total"><span>折算总额</span><strong>${money(total)}</strong></div>
-        ` : `<div class="empty">当前时间窗口内没有奖金记录。</div>`}
+          <div class="winnings-total"><span>${L("折算总额", "Total scaled")}</span><strong>${money(total)}</strong></div>
+        ` : `<div class="empty">${L("当前时间窗口内没有奖金记录。", "No prize winnings in the current window.")}</div>`}
       </section>`;
   }
 
@@ -1189,9 +1295,9 @@
       <section class="panel card">
         <div class="card-head">
           <div>
-            <div class="eyebrow">阵容身份</div>
-            <div class="card-title">比赛所用阵容</div>
-            <div class="card-sub">VRS 依据阵容，而不只是队名。</div>
+            <div class="eyebrow">${L("阵容身份", "Roster identity")}</div>
+            <div class="card-title">${L("比赛所用阵容", "Lineups used in matches")}</div>
+            <div class="card-sub">${L("VRS 依据阵容，而不只是队名。", "VRS follows the roster, not just the org name.")}</div>
           </div>
         </div>
         ${items.length ? `
@@ -1202,10 +1308,10 @@
                   <span class="roster-item-players">${esc(item.players.join(", "))}</span>
                   <span class="roster-record">${item.wins}–${item.losses}</span>
                 </div>
-                <div class="roster-item-meta">${shortDate(item.dates.slice().sort()[0])} – ${shortDate(item.dates.slice().sort().reverse()[0])} · ${item.dates.length} 场比赛</div>
+                <div class="roster-item-meta">${shortDate(item.dates.slice().sort()[0])} – ${shortDate(item.dates.slice().sort().reverse()[0])} · ${L(`${item.dates.length} 场比赛`, `${item.dates.length} ${item.dates.length === 1 ? "match" : "matches"}`)}</div>
               </div>`).join("")}
           </div>
-        ` : `<div class="empty">没有阵容数据。</div>`}
+        ` : `<div class="empty">${L("没有阵容数据。", "No match roster data.")}</div>`}
       </section>`;
   }
 
@@ -1214,16 +1320,16 @@
       <section class="panel card">
         <div class="card-head">
           <div>
-            <div class="eyebrow">数据来源</div>
-            <div class="card-title">这些数据从哪里来</div>
+            <div class="eyebrow">${L("数据来源", "Provenance")}</div>
+            <div class="card-title">${L("这些数据从哪里来", "Where this data comes from")}</div>
           </div>
         </div>
         <div class="prose" style="margin-top:0">
-          <p>本页解析自 Valve 官方区域排名 Markdown，并非 Valve 官方产品。</p>
+          <p>${L("本页解析自 Valve 官方区域排名 Markdown，并非 Valve 官方产品。", "This page is parsed from the official Valve Regional Standings markdown. It is not an official Valve product.")}</p>
           <p style="margin-top:8px">
-            <a href="${esc(DATA.source.repo)}/blob/main/${esc(team.detailPath)}" target="_blank" rel="noreferrer">打开官方详情文件 ↗</a>
+            <a href="${esc(DATA.source.repo)}/blob/main/${esc(team.detailPath)}" target="_blank" rel="noreferrer">${L("打开官方详情文件", "Open the source detail file")} ↗</a>
           </p>
-          <p style="margin-top:8px">区域排名的赛事数据由 HLTV.org 提供。</p>
+          <p style="margin-top:8px">${L("区域排名的赛事数据由 HLTV.org 提供。", "Event data for Regional Standings is provided by HLTV.org.")}</p>
         </div>
       </section>`;
   }
@@ -1261,9 +1367,9 @@
       return `
         <div class="empty" style="padding-top:80px">
           <div class="empty-icon">⇄</div>
-          <h2>至少选择两支战队</h2>
-          <p class="muted" style="margin-top:8px">在排名表中勾选对比框，然后打开对比栏。</p>
-          <a class="ghost-btn" style="margin-top:18px;display:inline-flex" href="#/">浏览排名</a>
+          <h2>${L("至少选择两支战队", "Pick at least two teams")}</h2>
+          <p class="muted" style="margin-top:8px">${L("在排名表中勾选对比框，然后打开对比栏。", "Tick the compare box on any rankings row, then open the compare tray.")}</p>
+          <a class="ghost-btn" style="margin-top:18px;display:inline-flex" href="#/">${L("浏览排名", "Browse rankings")}</a>
         </div>`;
     }
     if (teams.length < 2) {
@@ -1271,7 +1377,7 @@
         ${renderCompareRail(teams)}
         <div class="empty" style="padding:60px 0">
           <div class="empty-icon">⇄</div>
-          <div>再加一个阵容即可开始对比。</div>
+          <div>${L("再加一个阵容即可开始对比。", "Add one more roster to start comparing.")}</div>
         </div>`;
     }
 
@@ -1283,9 +1389,9 @@
           <section class="panel card">
             <div class="card-head">
               <div>
-                <div class="eyebrow">形态</div>
-                <div class="card-title">因子雷达图</div>
-                <div class="card-sub">每个种子因子一个轴，数值归一化到 0 → 1。</div>
+                <div class="eyebrow">${L("形态", "Shape")}</div>
+                <div class="card-title">${L("因子雷达图", "Factor radar")}</div>
+                <div class="card-sub">${L("每个种子因子一个轴，数值归一化到 0 → 1。", "One axis per seed factor, each scaled 0 → 1.")}</div>
               </div>
             </div>
             ${renderRadar(teams)}
@@ -1293,8 +1399,8 @@
           <section class="panel card">
             <div class="card-head">
               <div>
-                <div class="eyebrow">因子对比</div>
-                <div class="card-title">各阵容的优势</div>
+                <div class="eyebrow">${L("因子对比", "Factor comparison")}</div>
+                <div class="card-title">${L("各阵容的优势", "Where each roster wins")}</div>
               </div>
             </div>
             ${renderFactorBars(teams)}
@@ -1303,9 +1409,9 @@
         <section class="panel card">
           <div class="card-head">
             <div>
-              <div class="eyebrow">分数公式</div>
-              <div class="card-title">起始分 + 交手调整</div>
-              <div class="card-sub">起始分是种子分，交手调整在其后叠加。</div>
+              <div class="eyebrow">${L("分数公式", "Score equation")}</div>
+              <div class="card-title">${L("起始分 + 交手调整", "Starting value + head-to-head")}</div>
+              <div class="card-sub">${L("起始分是种子分，交手调整在其后叠加。", "The starting value is the seed; the head-to-head adjustment is applied after.")}</div>
             </div>
           </div>
           ${renderScoreTable(teams)}
@@ -1313,8 +1419,8 @@
         <section class="panel">
           <div class="panel-head">
             <div>
-              <div class="panel-title">共同对手</div>
-              <div class="panel-sub">所选阵容对同一对手的战绩。</div>
+              <div class="panel-title">${L("共同对手", "Common opponents")}</div>
+              <div class="panel-sub">${L("所选阵容对同一对手的战绩。", "Every selected roster's record against the same opponent.")}</div>
             </div>
           </div>
           ${renderCommonOpponents(teams)}
@@ -1322,8 +1428,8 @@
         <section class="panel">
           <div class="panel-head">
             <div>
-              <div class="panel-title">交手矩阵</div>
-              <div class="panel-sub">所选阵容之间的直接交手。</div>
+              <div class="panel-title">${L("交手矩阵", "Head-to-head matrix")}</div>
+              <div class="panel-sub">${L("所选阵容之间的直接交手。", "Direct matches between the selected rosters.")}</div>
             </div>
           </div>
           ${renderH2HMatrix(teams)}
@@ -1331,8 +1437,8 @@
         <section class="panel card">
           <div class="card-head">
             <div>
-              <div class="eyebrow">历史</div>
-              <div class="card-title">排名走势</div>
+              <div class="eyebrow">${L("历史", "History")}</div>
+              <div class="card-title">${L("排名走势", "Rank over time")}</div>
             </div>
           </div>
           ${renderHistoryChart(
@@ -1355,7 +1461,7 @@
       <section class="compare-rail">
         ${teams.map((team) => `
           <div class="compare-card" style="--team:${team.color}">
-            <button class="compare-card-remove" data-action="compare-remove" data-id="${esc(team.id)}" aria-label="移除 ${esc(team.name)}">×</button>
+            <button class="compare-card-remove" data-action="compare-remove" data-id="${esc(team.id)}" aria-label="${L("移除", "Remove")} ${esc(team.name)}">×</button>
             <div class="compare-card-rank">#${team.globalRank}</div>
             <div class="compare-card-name">${esc(team.name)}</div>
             <div class="compare-card-meta">${regionPill(team.region)}<span class="mono">${fmtInt(team.points)}</span></div>
@@ -1364,9 +1470,9 @@
         ${teams.length < MAX_COMPARE ? `
           <div class="compare-card compare-card-add">
             <div class="compare-card-rank">+</div>
-            <div class="compare-card-name">添加战队</div>
-            <select class="select compare-add" data-action="compare-add" aria-label="添加战队到对比">
-              <option value="">选择战队…</option>
+            <div class="compare-card-name">${L("添加战队", "Add team")}</div>
+            <select class="select compare-add" data-action="compare-add" aria-label="${L("添加战队到对比", "Add a team to the comparison")}">
+              <option value="">${L("选择战队…", "Select a team…")}</option>
               ${available.map((team) => `<option value="${esc(team.id)}">#${team.globalRank} · ${esc(team.name)}</option>`).join("")}
             </select>
           </div>` : ""}
@@ -1384,11 +1490,11 @@
       <section class="panel">
         <div class="panel-head">
           <div>
-            <div class="panel-title">并排对比</div>
-            <div class="panel-sub">${teams.length} 个阵容 · ${esc(DATA.latestDate)} 快照</div>
+            <div class="panel-title">${L("并排对比", "Side by side")}</div>
+            <div class="panel-sub">${L(`${teams.length} 个阵容 · ${esc(DATA.latestDate)} 快照`, `${teams.length} rosters · ${esc(DATA.latestDate)} snapshot`)}</div>
           </div>
           <div class="panel-head-right">
-            <button class="ghost-btn" data-action="compare-clear">清空选择</button>
+            <button class="ghost-btn" data-action="compare-clear">${L("清空选择", "Clear selection")}</button>
           </div>
         </div>
         <div class="table-wrap">
@@ -1400,14 +1506,14 @@
               </tr>
             </thead>
             <tbody>
-              ${row("全球排名", (team) => `<span class="mono">#${team.globalRank}</span>`)}
-              ${row("区域", (team) => `${regionPill(team.region)} <span class="muted small mono">#${team.regionalRank || "—"}</span>`)}
-              ${row("VRS 积分", (team) => `<span class="mono lime">${fmtInt(team.points)}</span>`)}
-              ${row("起始分", (team) => `<span class="mono">${fmt(team.startingRankValue, 1)}</span>`)}
-              ${row("交手调整", (team) => `<span class="mono ${team.h2hAdjustment > 0 ? "h2h-pos" : team.h2hAdjustment < 0 ? "h2h-neg" : "h2h-zero"}">${team.h2hAdjustment > 0 ? "+" : ""}${fmt(team.h2hAdjustment, 1)}</span>`)}
-              ${row("最终分", (team) => `<span class="mono">${fmt(team.finalRankValue, 1)}</span>`)}
-              ${row("已统计比赛", (team) => `<span class="mono">${fmtInt((team.matches || []).length)}</span>`)}
-              ${row("Major 晋级线", (team) => qualificationBadge(team.region, team.regionalRank))}
+              ${row(L("全球排名", "Global rank"), (team) => `<span class="mono">#${team.globalRank}</span>`)}
+              ${row(L("区域", "Region"), (team) => `${regionPill(team.region)} <span class="muted small mono">#${team.regionalRank || "—"}</span>`)}
+              ${row(L("VRS 积分", "VRS points"), (team) => `<span class="mono lime">${fmtInt(team.points)}</span>`)}
+              ${row(L("起始分", "Starting value"), (team) => `<span class="mono">${fmt(team.startingRankValue, 1)}</span>`)}
+              ${row(L("交手调整", "H2H adjustment"), (team) => `<span class="mono ${team.h2hAdjustment > 0 ? "h2h-pos" : team.h2hAdjustment < 0 ? "h2h-neg" : "h2h-zero"}">${team.h2hAdjustment > 0 ? "+" : ""}${fmt(team.h2hAdjustment, 1)}</span>`)}
+              ${row(L("最终分", "Final value"), (team) => `<span class="mono">${fmt(team.finalRankValue, 1)}</span>`)}
+              ${row(L("已统计比赛", "Matches tracked"), (team) => `<span class="mono">${fmtInt((team.matches || []).length)}</span>`)}
+              ${row(L("Major 晋级线", "Major path"), (team) => qualificationBadge(team.region, team.regionalRank))}
             </tbody>
           </table>
         </div>
@@ -1415,12 +1521,12 @@
   }
 
   function renderRadar(teams) {
-    const width = 420;
+    const width = 480;
     const height = 380;
     const cx = width / 2;
     const cy = height / 2 + 4;
     const maxR = 96;
-    const axes = FACTORS;
+    const axes = factorList();
     const step = (Math.PI * 2) / axes.length;
     const angle = (index) => -Math.PI / 2 + index * step;
     const point = (index, value) => {
@@ -1463,7 +1569,7 @@
     }).join("");
 
     return `
-      <svg class="radar-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="因子雷达对比">
+      <svg class="radar-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${L("因子雷达对比", "Factor radar comparison")}">
         ${grid}
         ${spokes}
         ${shapes}
@@ -1477,7 +1583,7 @@
   function renderFactorBars(teams) {
     return `
       <div class="factor-bars">
-        ${FACTORS.map((factor) => `
+        ${factorList().map((factor) => `
           <div class="factor-bar-group">
             <div class="factor-bar-label">${esc(factor.label)}</div>
             ${teams.map((team) => {
@@ -1500,11 +1606,11 @@
         <table class="score-table">
           <thead>
             <tr>
-              <th>阵容</th>
-              <th style="text-align:right">起始</th>
-              <th style="text-align:right">交手</th>
-              <th style="text-align:right">最终</th>
-              <th style="width:38%">相对最高值的占比</th>
+              <th>${L("阵容", "Roster")}</th>
+              <th style="text-align:right">${L("起始", "Starting")}</th>
+              <th style="text-align:right">${L("交手", "H2H")}</th>
+              <th style="text-align:right">${L("最终", "Final")}</th>
+              <th style="width:38%">${L("相对最高值的占比", "Share of the strongest value")}</th>
             </tr>
           </thead>
           <tbody>
@@ -1559,7 +1665,7 @@
       .slice(0, 12);
 
     if (!shared.length) {
-      return `<div class="empty"><div class="empty-icon">◌</div><div>当前时间窗口内没有共同对手。</div></div>`;
+      return `<div class="empty"><div class="empty-icon">◌</div><div>${L("当前时间窗口内没有共同对手。", "No shared opponents in the current window.")}</div></div>`;
     }
 
     return `
@@ -1567,9 +1673,9 @@
         <table class="compare-table common-table">
           <thead>
             <tr>
-              <th>对手</th>
+              <th>${L("对手", "Opponent")}</th>
               ${teams.map((team) => `<th><span class="team-dot" style="background:${team.color}"></span>${esc(team.name)}</th>`).join("")}
-              <th>场次</th>
+              <th>${L("场次", "Matches")}</th>
             </tr>
           </thead>
           <tbody>
@@ -1610,7 +1716,7 @@
 
     const anyDirect = cells.some((cell) => cell.result);
     if (!anyDirect) {
-      return `<div class="empty"><div class="empty-icon">◌</div><div>当前时间窗口内这些阵容没有直接交手。</div></div>`;
+      return `<div class="empty"><div class="empty-icon">◌</div><div>${L("当前时间窗口内这些阵容没有直接交手。", "No direct matches between these rosters in the current window.")}</div></div>`;
     }
 
     const matchRows = [];
@@ -1657,11 +1763,11 @@
           </table>
         </div>
         <details class="h2h-details">
-          <summary>${matchRows.length} 场直接交手</summary>
+          <summary>${L(`${matchRows.length} 场直接交手`, `${matchRows.length} direct ${matchRows.length === 1 ? "match" : "matches"}`)}</summary>
           <div class="table-wrap">
             <table class="compare-table">
               <thead>
-                <tr><th>日期</th><th>对阵</th><th>结果</th><th>交手调整</th><th>赛事权重</th></tr>
+                <tr><th>${L("日期", "Date")}</th><th>${L("对阵", "Matchup")}</th><th>${L("结果", "Result")}</th><th>${L("交手调整", "H2H adj.")}</th><th>${L("赛事权重", "Event weight")}</th></tr>
               </thead>
               <tbody>
                 ${matchRows.map((match) => `
@@ -1688,45 +1794,45 @@
     const total = DATA.snapshots[DATA.latestDate]?.teamCount || 0;
     return `
       <div class="methodology">
-        <div class="eyebrow"><span class="live-dot"></span> 方法说明与数据来源</div>
-        <h1>这个网站是什么，不是什么。</h1>
-        <p class="lead">VRS Lab 是一个非官方的 Valve 区域排名（VRS）浏览器。它把 Valve 公布的 Markdown 转成易读的分数拆解，不重新计算排名，也与 Valve、HLTV 没有隶属关系。</p>
+        <div class="eyebrow"><span class="live-dot"></span> ${L("方法说明与数据来源", "Methodology & provenance")}</div>
+        <h1>${L("这个网站是什么，不是什么。", "What this site is — and isn't.")}</h1>
+        <p class="lead">${L("VRS Lab 是一个非官方的 Valve 区域排名（VRS）浏览器。它把 Valve 公布的 Markdown 转成易读的分数拆解，不重新计算排名，也与 Valve、HLTV 没有隶属关系。", "VRS Lab is an unofficial explorer for the Valve Regional Standings. It turns Valve's published markdown into a readable score breakdown. It does not recompute the ranking, and it is not affiliated with Valve or HLTV.")}</p>
 
         <div class="method-grid">
           <section class="method-card">
-            <h3>我们展示什么</h3>
+            <h3>${L("我们展示什么", "What we show")}</h3>
             <ul>
-              <li>Valve 公开仓库中的官方月度排名。</li>
-              <li>每个阵容的四个种子因子与交手调整。</li>
-              <li>官方详情文件中的每一场比赛，包括时效与赛事权重。</li>
-              <li>跨 ${DATA.dates.length} 个已解析快照的排名历史。</li>
+              <li>${L("Valve 公开仓库中的官方月度排名。", "Official monthly standings from Valve's public repository.")}</li>
+              <li>${L("每个阵容的四个种子因子与交手调整。", "Each roster's four seed factors and head-to-head adjustment.")}</li>
+              <li>${L("官方详情文件中的每一场比赛，包括时效与赛事权重。", "Every match listed in the official detail file, including age and event weights.")}</li>
+              <li>${L(`跨 ${DATA.dates.length} 个已解析快照的排名历史。`, `Rank history across ${DATA.dates.length} parsed snapshots.`)}</li>
             </ul>
           </section>
 
           <section class="method-card">
-            <h3>我们不做什么</h3>
+            <h3>${L("我们不做什么", "What we don't do")}</h3>
             <ul>
-              <li>不重新计算 VRS，也不预测官方积分。</li>
-              <li>不抓取 HLTV，也不使用非公开数据。</li>
-              <li>不推断赛事名称——官方详情表本身不包含这些信息。</li>
-              <li>不把同名阵容当成同一支战队。阵容身份由选手集合决定；虚线只是视觉辅助，不代表身份。</li>
+              <li>${L("不重新计算 VRS，也不预测官方积分。", "We don't recompute VRS or predict official points.")}</li>
+              <li>${L("不抓取 HLTV，也不使用非公开数据。", "We don't scrape HLTV or use private data.")}</li>
+              <li>${L("不推断赛事名称——官方详情表本身不包含这些信息。", "We don't infer event names — the official detail tables don't include them.")}</li>
+              <li>${L("不把同名阵容当成同一支战队。阵容身份由选手集合决定；虚线只是视觉辅助，不代表身份。", "We don't treat similarly named rosters as the same team. Roster identity is the player set; the dashed org line is a visual aid, not an identity.")}</li>
             </ul>
           </section>
 
           <section class="method-card">
-            <h3>分数公式</h3>
-            <p>最终排名分 = 起始种子分 + 交手调整。</p>
-            <div class="formula">最终 = 起始 + 交手<br><br>起始 = 400 + ((avg − min) / (max − min)) × 1600<br><br>avg = mean(赏金获取, 赏金收集,<br>            对手网络, LAN 胜场)</div>
-            <p style="margin-top:10px">四个因子都归一化到 0–1。赏金与对手网络因子取过去六个月中最好的十项成绩，并按时间与赛事级别加权。</p>
+            <h3>${L("分数公式", "The score equation")}</h3>
+            <p>${L("最终排名分 = 起始种子分 + 交手调整。", "The final rank value is the starting seed plus head-to-head adjustments.")}</p>
+            <div class="formula">${L("最终 = 起始 + 交手<br><br>起始 = 400 + ((avg − min) / (max − min)) × 1600<br><br>avg = mean(赏金获取, 赏金收集,<br>            对手网络, LAN 胜场)", "Final = Starting + H2H<br><br>Starting = 400 + ((avg − min) / (max − min)) × 1600<br><br>avg = mean(Bounty Offered, Bounty Collected,<br>            Opponent Network, LAN Wins)")}</div>
+            <p style="margin-top:10px">${L("四个因子都归一化到 0–1。赏金与对手网络因子取过去六个月中最好的十项成绩，并按时间与赛事级别加权。", "The four factors are normalized to 0–1. Bounty and network factors use the ten best results over the past six months, with age and event weights.")}</p>
           </section>
 
           <section class="method-card">
-            <h3>晋级线</h3>
-            <p>排名页可以在区域表上绘制 Major 邀请线。它们使用最近一次公布的名额分配——<strong>${esc(DATA.qualification?.asOf || "未加载名额表")}</strong>——并非实时预测。</p>
+            <h3>${L("晋级线", "Qualification lines")}</h3>
+            <p>${L(`排名页可以在区域表上绘制 Major 邀请线。它们使用最近一次公布的名额分配——<strong>${esc(DATA.qualification?.asOf || "未加载名额表")}</strong>——并非实时预测。`, `The rankings view can draw Major invite lines on regional tables. They use the last published allocation — <strong>${esc(DATA.qualification?.asOf || "no allocation loaded")}</strong> — not a live projection.`)}</p>
             <div class="qual-table-wrap">
               <table class="qual-table">
                 <thead>
-                  <tr><th>区域</th><th>第三阶段</th><th>第二阶段</th><th>第一阶段</th></tr>
+                  <tr><th>${L("区域", "Region")}</th><th>${L("第三阶段", "Stage 3")}</th><th>${L("第二阶段", "Stage 2")}</th><th>${L("第一阶段", "Stage 1")}</th></tr>
                 </thead>
                 <tbody>
                   ${["Europe", "Americas", "Asia"].map((region) => {
@@ -1742,35 +1848,35 @@
                 </tbody>
               </table>
             </div>
-            <p class="small muted" style="margin-top:10px">Valve 每个 Major 周期都会根据上一届 Major 的各区域成绩重新计算这张表，所以数字可能变化。请把晋级线当作历史参考，而不是邀请资格。</p>
+            <p class="small muted" style="margin-top:10px">${L("Valve 每个 Major 周期都会根据上一届 Major 的各区域成绩重新计算这张表，所以数字可能变化。请把晋级线当作历史参考，而不是邀请资格。", "Valve recalculates this table for every Major cycle from the previous Major's regional results, so the numbers can change. Treat the lines as historical context, not an invitation.")}</p>
           </section>
 
           <section class="method-card">
-            <h3>数据状态</h3>
+            <h3>${L("数据状态", "Data health")}</h3>
             <ul>
-              <li>已解析快照：<strong>${DATA.dates.length}</strong></li>
-              <li>最新排名战队数：<strong>${fmtInt(total)}</strong></li>
-              <li>有完整详情的阵容：<strong>${fmtInt(detailed)}</strong></li>
-              <li>详情解析失败：<strong>${DATA.failures.length}</strong></li>
+              <li>${L("已解析快照", "Snapshots parsed")}${L("：", ": ")}<strong>${DATA.dates.length}</strong></li>
+              <li>${L("最新排名战队数", "Teams in latest standings")}${L("：", ": ")}<strong>${fmtInt(total)}</strong></li>
+              <li>${L("有完整详情的阵容", "Rosters with full detail")}${L("：", ": ")}<strong>${fmtInt(detailed)}</strong></li>
+              <li>${L("详情解析失败", "Detail parse failures")}${L("：", ": ")}<strong>${DATA.failures.length}</strong></li>
             </ul>
           </section>
         </div>
 
         <div class="prose">
-          <h2>数据源</h2>
-          <p>排名与详情文件来自 <a href="${esc(DATA.source.repo)}" target="_blank" rel="noreferrer">ValveSoftware/counter-strike_regional_standings</a>。详情页注明区域排名的赛事数据由 HLTV.org 提供。</p>
+          <h2>${L("数据源", "Source")}</h2>
+          <p>${L("排名与详情文件来自", "Standings and detail files come from")} <a href="${esc(DATA.source.repo)}" target="_blank" rel="noreferrer">ValveSoftware/counter-strike_regional_standings</a>${L("。详情页注明区域排名的赛事数据由 HLTV.org 提供。", ". The detail pages state that event data for Regional Standings is provided by HLTV.org.")}</p>
 
-          <h2>为什么阵容身份很重要</h2>
-          <p>VRS 以阵容为基础。阵容由一起上场比赛的选手决定，而不是由俱乐部名称决定。在本原型中，稳定的 ID 由排序后的选手集合生成，因此阵容变动会产生新的实体和新的历史线。</p>
+          <h2>${L("为什么阵容身份很重要", "Why roster identity matters")}</h2>
+          <p>${L("VRS 以阵容为基础。阵容由一起上场比赛的选手决定，而不是由俱乐部名称决定。在本原型中，稳定的 ID 由排序后的选手集合生成，因此阵容变动会产生新的实体和新的历史线。", "VRS is roster-based. A roster is identified by the players who played together, not by the organization name. In this prototype, a stable ID is generated from the sorted player set, so a roster change creates a new entity and a new history line.")}</p>
 
-          <h2>晋级线</h2>
-          <p>虚线晋级线只是阅读辅助，不是预测。Valve 根据各区域在上一届 Major 的表现分配 Major 名额，并在每个周期重新发布这张表。本原型内置 Winter 2025 名额表，并在所有使用处标注其 <code>asOf</code> 日期。由于当前快照可能属于另一个周期，排在晋级线之上的战队不一定获得邀请。</p>
+          <h2>${L("晋级线", "Qualification lines")}</h2>
+          <p>${L("虚线晋级线只是阅读辅助，不是预测。Valve 根据各区域在上一届 Major 的表现分配 Major 名额，并在每个周期重新发布这张表。本原型内置 Winter 2025 名额表，并在所有使用处标注其 <code>asOf</code> 日期。由于当前快照可能属于另一个周期，排在晋级线之上的战队不一定获得邀请。", "The dashed invite lines are a reading aid, not a prediction. Valve allocates Major slots to regions based on how each region performed at the previous Major, and republishes the table each cycle. This prototype ships the Winter 2025 table and labels it with its <code>asOf</code> date wherever it is used. Because the current snapshot may belong to a different cycle, a team above a line is not necessarily invited.")}</p>
 
-          <h2>已知限制</h2>
-          <p>官方详情表不包含赛事名称，因此比赛行只能按日期、对手和赛事权重分组。本原型也只为最新快照打包完整比赛详情；更早的快照仅用于排名历史。Valve 可能调整模型，官方仓库也不一定与生产环境完全一致。</p>
+          <h2>${L("已知限制", "Known limitations")}</h2>
+          <p>${L("官方详情表不包含赛事名称，因此比赛行只能按日期、对手和赛事权重分组。本原型也只为最新快照打包完整比赛详情；更早的快照仅用于排名历史。Valve 可能调整模型，官方仓库也不一定与生产环境完全一致。", "The official detail table does not include event names, so match rows can only be grouped by date, opponent, and event weight. The prototype also bundles full match details only for the latest snapshot; older snapshots are used for rank history. Valve can change the model, and the official repository may not match production exactly.")}</p>
 
-          <h2>免责声明</h2>
-          <p>这是一个非官方的粉丝原型，未获得 Valve、HLTV 或任何赛事主办方的认可。请勿将其作为官方邀请或参赛资格决策的依据。</p>
+          <h2>${L("免责声明", "Disclaimer")}</h2>
+          <p>${L("这是一个非官方的粉丝原型，未获得 Valve、HLTV 或任何赛事主办方的认可。请勿将其作为官方邀请或参赛资格决策的依据。", "This is an unofficial fan-made prototype. It is not endorsed by Valve, HLTV, or any tournament organizer. Do not use it as the basis for official invitations or eligibility decisions.")}</p>
         </div>
       </div>`;
   }
@@ -1802,7 +1908,7 @@
     const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const type = res.headers.get("content-type") || "";
-    if (!type.includes("application/json")) throw new Error("响应不是 JSON");
+    if (!type.includes("application/json")) throw new Error(L("响应不是 JSON", "Response is not JSON"));
     return res.json();
   }
 
@@ -1825,13 +1931,13 @@
   }
 
   function syncedText() {
-    return `${live.staticMode ? "静态托管" : "已同步"} · ${shortDate(DATA.latestDate)}`;
+    return `${live.staticMode ? L("静态托管", "Static") : L("已同步", "Live")} · ${shortDate(DATA.latestDate)}`;
   }
 
   function syncedTitle() {
     return live.staticMode
-      ? `通过静态 meta.json 检查更新。最新官方快照：${DATA.latestDate}。`
-      : `已与更新服务同步。最新官方快照：${DATA.latestDate}。`;
+      ? L(`通过静态 meta.json 检查更新。最新官方快照：${DATA.latestDate}。`, `Checking for updates via static meta.json. Latest official snapshot: ${DATA.latestDate}.`)
+      : L(`已与更新服务同步。最新官方快照：${DATA.latestDate}。`, `Synced with the update service. Latest official snapshot: ${DATA.latestDate}.`);
   }
 
   async function adoptBundle(version) {
@@ -1840,7 +1946,7 @@
     const text = await res.text();
     const next = new Function(`${text}\nreturn window.VRS_DATA;`)();
     if (version && next.builtAt && next.builtAt !== version) {
-      throw new Error("数据包版本不一致");
+      throw new Error(L("数据包版本不一致", "Bundle version mismatch"));
     }
     adoptData(next);
   }
@@ -1863,16 +1969,16 @@
     live.text = syncedText();
     live.title = syncedTitle();
     render();
-    showToast(`已载入新的官方快照：${dateLabel(DATA.latestDate)}`, 5000);
+    showToast(L(`已载入新的官方快照：${dateLabel(DATA.latestDate)}`, `New official snapshot loaded: ${dateLabel(DATA.latestDate)}`), 5000);
   }
 
   async function checkForUpdates(manual = false) {
     if (liveBusy) {
-      if (manual) showToast("正在检查更新，请稍候。");
+      if (manual) showToast(L("正在检查更新，请稍候。", "An update check is already running."));
       return;
     }
     liveBusy = true;
-    if (manual) setLive("checking", "正在检查…", "正在查询最新快照。");
+    if (manual) setLive("checking", L("正在检查…", "Checking…"), L("正在查询最新快照。", "Asking for the newest snapshot."));
     let rateLimited = false;
     try {
       let checkStarted = false;
@@ -1881,7 +1987,7 @@
           const res = await fetch("/api/check", { method: "POST", cache: "no-store" });
           if (res.status === 429) {
             rateLimited = true;
-            showToast("检查过于频繁，请稍后再试。");
+            showToast(L("检查过于频繁，请稍后再试。", "Too many checks. Try again in a minute."));
           } else if (res.ok) {
             const payload = await res.json().catch(() => ({}));
             checkStarted = payload.started === true || payload.reason === "already running";
@@ -1891,7 +1997,7 @@
         }
       }
       if (checkStarted) {
-        setLive("building", "正在检查官方数据源…", "更新服务正在检查 Valve 仓库。");
+        setLive("building", L("正在检查官方数据源…", "Checking the official source…"), L("更新服务正在检查 Valve 仓库。", "The update service is checking Valve's repository."));
         schedulePoll(5000);
         return;
       }
@@ -1902,10 +2008,10 @@
       const pollDelay = staticMode ? 300000 : 60000;
 
       if (meta.lastError) {
-        setLive("warn", "更新失败 · 使用缓存", meta.lastError);
+        setLive("warn", L("更新失败 · 使用缓存", "Update failed · cached data"), meta.lastError);
         schedulePoll(120000);
       } else if (meta.building || meta.checking) {
-        setLive("building", "正在检查官方数据源…", "更新服务正在检查 Valve 仓库。");
+        setLive("building", L("正在检查官方数据源…", "Checking the official source…"), L("更新服务正在检查 Valve 仓库。", "The update service is checking Valve's repository."));
         schedulePoll(8000);
       } else if (meta.builtAt && meta.builtAt !== (live.builtAt || DATA.builtAt)) {
         if (DATA.builtAt === meta.builtAt) {
@@ -1913,28 +2019,28 @@
           setLive("synced", syncedText(), syncedTitle());
           schedulePoll(pollDelay);
         } else {
-          setLive("building", "发现新快照 · 加载中…", "正在下载重新构建的数据包。");
+          setLive("building", L("发现新快照 · 加载中…", "New snapshot found · loading…"), L("正在下载重新构建的数据包。", "Downloading the rebuilt data bundle."));
           try {
             await adoptBundle(meta.builtAt);
           } catch (err) {
-            setLive("warn", "请刷新页面更新", `无法加载新数据包：${err.message}`);
+            setLive("warn", L("请刷新页面更新", "Reload to update"), L(`无法加载新数据包：${err.message}`, `The new bundle could not be loaded: ${err.message}`));
           }
           schedulePoll(pollDelay);
         }
       } else {
         setLive("synced", syncedText(), syncedTitle());
         schedulePoll(pollDelay);
-        if (manual && !rateLimited) showToast("已是最新版本。");
+        if (manual && !rateLimited) showToast(L("已是最新版本。", "Already up to date."));
       }
     } catch (err) {
       live.available = false;
       setLive(
         "offline",
-        "静态版本",
-        "没有找到更新信息。页面会继续使用当前数据包；自动更新需要更新服务或静态 meta.json。",
+        L("静态版本", "Static version"),
+        L("没有找到更新信息。页面会继续使用当前数据包；自动更新需要更新服务或静态 meta.json。", "No update metadata found. The page keeps using the current bundle; automatic updates need the update service or a static meta.json."),
       );
       schedulePoll(300000);
-      if (manual) showToast("暂时无法检查更新。");
+      if (manual) showToast(L("暂时无法检查更新。", "Could not check for updates right now."));
     } finally {
       liveBusy = false;
     }
@@ -1942,7 +2048,7 @@
 
   function initLiveUpdates() {
     if (window.location.protocol === "file:") {
-      setLive("offline", "静态版本", "直接打开本地文件时无法检查更新。");
+      setLive("offline", L("静态版本", "Static version"), L("直接打开本地文件时无法检查更新。", "Updates cannot be checked when opening the file directly."));
       return;
     }
     window.setTimeout(() => checkForUpdates(false), 1500);
@@ -1962,6 +2068,11 @@
 
       if (action === "toggle-menu") {
         document.getElementById("sidebar")?.classList.toggle("open");
+        return;
+      }
+      if (action === "toggle-lang") {
+        event.preventDefault();
+        setLang(isZh() ? "en" : "zh");
         return;
       }
       if (action === "check-updates") {
@@ -2033,7 +2144,7 @@
       return;
     }
     if (state.compare.length >= MAX_COMPARE) {
-      showToast(`最多同时对比 ${MAX_COMPARE} 支战队。`);
+      showToast(L(`最多同时对比 ${MAX_COMPARE} 支战队。`, `Compare up to ${MAX_COMPARE} teams at a time.`));
       render();
       return;
     }
@@ -2059,7 +2170,7 @@
       const before = state.compare.length;
       state.compare = state.compare.filter((id) => ids.has(id));
       if (state.compare.length !== before) {
-        showToast("部分已选阵容不在该快照中。");
+        showToast(L("部分已选阵容不在该快照中。", "Some selected rosters are not in this snapshot."));
       }
       render();
       return;
@@ -2105,6 +2216,7 @@
   document.addEventListener("change", onChange);
   document.addEventListener("input", onInput);
 
+  applyDocumentLang();
   render();
   initLiveUpdates();
 })();
