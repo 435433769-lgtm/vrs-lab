@@ -2,6 +2,7 @@
   "use strict";
 
   const LANG_KEY = "vrs-lang";
+  const GITHUB_URL = "https://github.com/435433769-lgtm/vrs-lab";
 
   function detectLang() {
     try {
@@ -442,6 +443,7 @@
 
           <div class="sidebar-footer">
             <span class="status-dot"></span> ${L("非官方原型", "Unofficial prototype")}
+            <a class="footer-link" href="${esc(GITHUB_URL)}" target="_blank" rel="noreferrer" aria-label="${L("打开 GitHub 仓库", "Open GitHub repository")}">GitHub ↗</a>
           </div>
         </aside>
 
