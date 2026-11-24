@@ -54,11 +54,18 @@ python scripts/dev_server.py --port 5173
 
 ### 2. 准备域名（可选，但推荐）
 
-在域名服务商处添加一条 **A 记录**，例如：
+在域名服务商处添加 **A 记录**，例如：
 
 | 主机记录 | 记录类型 | 记录值 |
 | --- | --- | --- |
 | `vrs` | A | 你的服务器公网 IP |
+
+如果要同时使用根域名和 `www`，就添加两条记录：
+
+| 主机记录 | 记录类型 | 记录值 |
+| --- | --- | --- |
+| `@` | A | 你的服务器公网 IP |
+| `www` | A | 你的服务器公网 IP |
 
 如果使用 Cloudflare，申请证书期间必须把代理状态设为 **仅 DNS（灰云）**，否则 Let's Encrypt 验证会失败。证书签发成功后再决定是否开启代理。
 
@@ -80,6 +87,9 @@ sudo git clone --depth 1 https://gitee.com/little-tiger-tooth12/vrs-lab.git /opt
 
 # 有域名：自动申请 Let's Encrypt 证书并开启 HTTPS
 sudo bash /opt/vrs/deploy/setup.sh --domain vrs.example.com --email you@example.com
+
+# 根域名 + www 共用一个证书
+sudo bash /opt/vrs/deploy/setup.sh --domain example.com --domain www.example.com --email you@example.com
 
 # 没有域名：只启用 HTTP，用公网 IP 访问
 sudo bash /opt/vrs/deploy/setup.sh

@@ -3,6 +3,7 @@
 #
 # Usage:
 #   sudo bash deploy/setup.sh --domain vrs.example.com --email you@example.com
+#   sudo bash deploy/setup.sh --domain example.com --domain www.example.com --email you@example.com
 #   sudo bash deploy/setup.sh                 # IP only, no HTTPS
 #
 # Environment overrides:
@@ -14,16 +15,22 @@ APP_DIR="/opt/vrs"
 APP_USER="vrs"
 REPO_URL="${REPO_URL:-https://gitee.com/little-tiger-tooth12/vrs-lab.git}"
 BRANCH="${BRANCH:-master}"
-DOMAIN=""
+DOMAINS=()
 EMAIL="${EMAIL:-}"
 
 usage() {
   cat <<'EOF'
 用法:
-  sudo bash deploy/setup.sh [--domain 域名] [--email 邮箱]
+  sudo bash deploy/setup.sh [--domain 域名 ...] [--email 邮箱]
 
 示例:
-  sudo bash deploy/setup.sh --domain vrs.example.com --email me@example.com
+  # 只用一个域名
+  sudo bash deploy/setup.sh --domain www.example.com --email me@example.com
+
+  # 根域名 + www 共用一个证书
+  sudo bash deploy/setup.sh --domain example.com --domain www.example.com --email me@example.com
+
+  # 不填域名，只用公网 IP
   sudo bash deploy/setup.sh
 
 不填域名时只启用 HTTP（用公网 IP 访问）；填写域名时会自动申请 Let's Encrypt 证书并跳转 HTTPS。
@@ -38,7 +45,7 @@ while [ $# -gt 0 ]; do
         usage
         exit 1
       fi
-      DOMAIN="$2"
+      DOMAINS+=("$2")
       shift 2
       ;;
     --email)
@@ -55,8 +62,8 @@ while [ $# -gt 0 ]; do
       exit 0
       ;;
     *)
-      if [ -z "$DOMAIN" ]; then
-        DOMAIN="$1"
+      if [ ${#DOMAINS[@]} -eq 0 ]; then
+        DOMAINS+=("$1")
         shift
       else
         echo "未知参数: $1" >&2
@@ -73,9 +80,19 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # Accept "https://example.com/" as well as a bare hostname.
-DOMAIN="${DOMAIN#http://}"
-DOMAIN="${DOMAIN#https://}"
-DOMAIN="${DOMAIN%%/*}"
+for index in "${!DOMAINS[@]}"; do
+  value="${DOMAINS[$index]}"
+  value="${value#http://}"
+  value="${value#https://}"
+  value="${value%%/*}"
+  value="${value%.}"
+  DOMAINS[$index]="$value"
+done
+
+PRIMARY_DOMAIN=""
+if [ ${#DOMAINS[@]} -gt 0 ]; then
+  PRIMARY_DOMAIN="${DOMAINS[0]}"
+fi
 
 trap 'systemctl start vrs 2>/dev/null || true' ERR
 
@@ -128,8 +145,8 @@ systemctl daemon-reload
 systemctl enable vrs
 
 echo "==> 写入 Nginx 站点"
-if [ -n "$DOMAIN" ]; then
-  SERVER_NAME="$DOMAIN"
+if [ ${#DOMAINS[@]} -gt 0 ]; then
+  SERVER_NAME="${DOMAINS[*]}"
 else
   SERVER_NAME="_"
 fi
@@ -160,23 +177,27 @@ if [ "$ok" -ne 1 ]; then
   exit 1
 fi
 
-if [ -n "$DOMAIN" ]; then
-  echo "==> 申请 HTTPS 证书（域名：${DOMAIN}）"
-  echo "    请确认 DNS 的 A 记录已指向本机公网 IP，且 Cloudflare 代理处于关闭（仅 DNS）状态。"
+if [ ${#DOMAINS[@]} -gt 0 ]; then
+  echo "==> 申请 HTTPS 证书（域名：${DOMAINS[*]}）"
+  echo "    请确认所有域名的 A 记录都已指向本机公网 IP，且 Cloudflare 代理处于关闭（仅 DNS）状态。"
   CERTBOT_EMAIL_ARGS=(--register-unsafely-without-email)
   if [ -n "$EMAIL" ]; then
     CERTBOT_EMAIL_ARGS=(-m "$EMAIL")
   fi
-  if certbot --nginx -d "$DOMAIN" --redirect --non-interactive \
+  CERTBOT_DOMAIN_ARGS=()
+  for domain in "${DOMAINS[@]}"; do
+    CERTBOT_DOMAIN_ARGS+=(-d "$domain")
+  done
+  if certbot --nginx "${CERTBOT_DOMAIN_ARGS[@]}" --redirect --non-interactive \
       --agree-tos --keep-until-expiring "${CERTBOT_EMAIL_ARGS[@]}"; then
     systemctl reload nginx
-    echo "HTTPS 已启用：https://${DOMAIN}/"
+    echo "HTTPS 已启用：https://${PRIMARY_DOMAIN}/"
   else
     echo "证书申请失败，网站仍可通过 HTTP 访问。常见原因：" >&2
     echo "  - DNS 尚未生效或 A 记录不是本机 IP" >&2
     echo "  - Cloudflare 代理未关闭" >&2
     echo "  - 服务器防火墙未放行 80/443" >&2
-    echo "修复后可手动重试：certbot --nginx -d ${DOMAIN} --redirect" >&2
+    echo "修复后可手动重试：certbot --nginx ${CERTBOT_DOMAIN_ARGS[*]} --redirect" >&2
   fi
 else
   echo "未填写域名，跳过 HTTPS。之后可运行：sudo bash ${APP_DIR}/deploy/setup.sh --domain 你的域名"
@@ -185,8 +206,8 @@ fi
 PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || true)"
 echo
 echo "==> 完成"
-if [ -n "$DOMAIN" ]; then
-  echo "    网站地址：https://${DOMAIN}/"
+if [ -n "$PRIMARY_DOMAIN" ]; then
+  echo "    网站地址：https://${PRIMARY_DOMAIN}/"
 else
   echo "    网站地址：http://${PUBLIC_IP:-服务器公网IP}/"
 fi
