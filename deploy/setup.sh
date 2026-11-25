@@ -94,6 +94,32 @@ if [ ${#DOMAINS[@]} -gt 0 ]; then
   PRIMARY_DOMAIN="${DOMAINS[0]}"
 fi
 
+# If both example.com and www.example.com are supplied, make www canonical and
+# 301 the bare domain to it. Passing only one domain leaves that domain as-is.
+CANONICAL_DOMAIN=""
+if [ ${#DOMAINS[@]} -gt 1 ]; then
+  for candidate in "${DOMAINS[@]}"; do
+    case "$candidate" in
+      www.*)
+        bare="${candidate#www.}"
+        for other in "${DOMAINS[@]}"; do
+          if [ "$other" = "$bare" ]; then
+            CANONICAL_DOMAIN="$candidate"
+            break 2
+          fi
+        done
+        ;;
+    esac
+  done
+fi
+
+ROOT_REDIRECT=""
+if [ -n "$CANONICAL_DOMAIN" ]; then
+  bare="${CANONICAL_DOMAIN#www.}"
+  ROOT_REDIRECT="if (\$host = ${bare}) { return 301 https://${CANONICAL_DOMAIN}\$request_uri; }"
+  PRIMARY_DOMAIN="$CANONICAL_DOMAIN"
+fi
+
 trap 'systemctl start vrs 2>/dev/null || true' ERR
 
 export DEBIAN_FRONTEND=noninteractive
@@ -150,7 +176,8 @@ if [ ${#DOMAINS[@]} -gt 0 ]; then
 else
   SERVER_NAME="_"
 fi
-sed "s/__DOMAIN__/${SERVER_NAME}/g" "$APP_DIR/deploy/nginx.conf" \
+sed -e "s/__DOMAIN__/${SERVER_NAME}/g" \
+    -e "s|__ROOT_REDIRECT__|${ROOT_REDIRECT}|g" "$APP_DIR/deploy/nginx.conf" \
   > /etc/nginx/sites-available/vrs
 ln -sf /etc/nginx/sites-available/vrs /etc/nginx/sites-enabled/vrs
 rm -f /etc/nginx/sites-enabled/default
